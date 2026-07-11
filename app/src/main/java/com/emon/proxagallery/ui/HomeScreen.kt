@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -22,9 +23,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,11 +38,13 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
+import com.emon.proxagallery.data.Photo
 import com.emon.proxagallery.ui.theme.ProxaGalleryTheme
 
 @Composable
 fun HomeScreen(
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onPhotoClick: (Photo) -> Unit
 ) {
     val context = LocalContext.current
     val factory = remember(context) { GalleryViewModelFactory(context.applicationContext) }
@@ -53,7 +54,9 @@ fun HomeScreen(
     HomeScreenContent(
         modifier = modifier,
         uiState = uiState,
-        onPhotosAccessGranted = viewModel::loadPhotos
+        onPhotosAccessGranted = viewModel::loadPhotos,
+        onSearchQueryChange = viewModel::onSearchQueryChange,
+        onPhotoClick = onPhotoClick
     )
 }
 
@@ -61,9 +64,10 @@ fun HomeScreen(
 private fun HomeScreenContent(
     uiState: GalleryUiState,
     onPhotosAccessGranted: () -> Unit,
+    onSearchQueryChange: (String) -> Unit,
+    onPhotoClick: (Photo) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var searchText by remember { mutableStateOf("") }
     val context = LocalContext.current
     val hasPermission = ContextCompat.checkSelfPermission(
         context,
@@ -94,8 +98,8 @@ private fun HomeScreenContent(
         )
         Spacer(modifier = Modifier.height(50.dp))
         OutlinedTextField(
-            value = searchText,
-            onValueChange = { searchText = it },
+            value = uiState.searchQuery,
+            onValueChange = onSearchQueryChange,
             label = { Text("Search photos...") }
         )
         when {
@@ -117,6 +121,7 @@ private fun HomeScreenContent(
                         .aspectRatio(1f)
                         .clip(RoundedCornerShape(12.dp))
                         .background(Color.Gray)
+                        .clickable { onPhotoClick(photo) }
                 )
             }
         }
@@ -140,7 +145,9 @@ private fun HomeScreenPreview() {
     ProxaGalleryTheme {
         HomeScreenContent(
             uiState = GalleryUiState(isLoading = false),
-            onPhotosAccessGranted = {}
+            onPhotosAccessGranted = {},
+            onSearchQueryChange = {},
+            onPhotoClick = {}
         )
     }
 }

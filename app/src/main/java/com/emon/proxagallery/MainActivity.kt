@@ -7,7 +7,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Scaffold
 import androidx.compose.ui.Modifier
-import com.emon.proxagallery.ui.HomeScreen
+import com.emon.proxagallery.ui.GalleryNavHost
 import com.emon.proxagallery.ui.theme.ProxaGalleryTheme
 
 class MainActivity : ComponentActivity() {
@@ -17,11 +17,10 @@ class MainActivity : ComponentActivity() {
         setContent {
             ProxaGalleryTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) {
-                    HomeScreen()
+                    GalleryNavHost()
 
                 }
             }
         }
     }
 }
-

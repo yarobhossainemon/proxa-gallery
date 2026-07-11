@@ -11,7 +11,10 @@ class GalleryRepository(
     private val contentResolver = context.applicationContext.contentResolver
 
     fun getPhotos(): List<Photo> {
-        val projection = arrayOf(MediaStore.Images.Media._ID)
+        val projection = arrayOf(
+            MediaStore.Images.Media._ID,
+            MediaStore.Images.Media.DISPLAY_NAME
+        )
         val selection = "${MediaStore.Images.Media.IS_PENDING} = ?"
         val selectionArgs = arrayOf("0")
         val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} DESC"
@@ -25,10 +28,19 @@ class GalleryRepository(
                 sortOrder
             )?.use { cursor ->
                 val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+                val displayNameColumn = cursor.getColumnIndexOrThrow(
+                    MediaStore.Images.Media.DISPLAY_NAME
+                )
 
                 while (cursor.moveToNext()) {
                     val id = cursor.getLong(idColumn)
-                    add(Photo(id = id, uri = imageUri(id)))
+                    add(
+                        Photo(
+                            id = id,
+                            uri = imageUri(id),
+                            displayName = cursor.getString(displayNameColumn).orEmpty()
+                        )
+                    )
                 }
             }
         }
