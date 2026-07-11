@@ -12,13 +12,17 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
+import androidx.activity.compose.LocalActivity
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -42,6 +46,32 @@ fun PhotoViewerScreen(
     var scale by remember { mutableFloatStateOf(MIN_SCALE) }
     var offset by remember { mutableStateOf(Offset.Zero) }
     var imageSize by remember { mutableStateOf(IntSize.Zero) }
+    var isUiVisible by remember { mutableStateOf(false) }
+
+    val activity = LocalActivity.current
+    val insetsController = remember {
+        activity?.window?.let { WindowInsetsControllerCompat(it, it.decorView) }
+    }
+
+    LaunchedEffect(Unit) {
+        insetsController?.hide(WindowInsetsCompat.Type.systemBars())
+        insetsController?.systemBarsBehavior =
+            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+    }
+
+    LaunchedEffect(isUiVisible) {
+        if (isUiVisible) {
+            insetsController?.show(WindowInsetsCompat.Type.systemBars())
+        } else {
+            insetsController?.hide(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            insetsController?.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
 
     Box(
         modifier = modifier
@@ -57,10 +87,11 @@ fun PhotoViewerScreen(
                 pageCount = { photos.size }
             )
             val transformableState = rememberTransformableState { zoomChange, panChange, _ ->
-                val newScale = (scale * zoomChange).coerceIn(MIN_SCALE, MAX_SCALE)
+                val rawScale = (scale * zoomChange).coerceIn(MIN_SCALE, MAX_SCALE)
+                val snappedScale = if (rawScale - MIN_SCALE <= SCALE_EPSILON) MIN_SCALE else rawScale
 
-                scale = newScale
-                offset = (offset + panChange).coerceWithinBounds(newScale, imageSize)
+                scale = snappedScale
+                offset = (offset + panChange * snappedScale).coerceWithinBounds(snappedScale, imageSize)
             }
 
             LaunchedEffect(pagerState.currentPage) {
@@ -91,6 +122,7 @@ fun PhotoViewerScreen(
                         }
                         .pointerInput(photo.id) {
                             detectTapGestures(
+                                onTap = { isUiVisible = !isUiVisible },
                                 onDoubleTap = {
                                     if (scale == MIN_SCALE) {
                                         scale = DOUBLE_TAP_SCALE
@@ -109,14 +141,19 @@ fun PhotoViewerScreen(
                 )
             }
         }
-        Button(
-            onClick = onBackClick,
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .statusBarsPadding()
-                .padding(16.dp)
-        ) {
-            Text("Back")
+        if (isUiVisible) {
+            Button(
+                onClick = {
+                    insetsController?.show(WindowInsetsCompat.Type.systemBars())
+                    onBackClick()
+                },
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .statusBarsPadding()
+                    .padding(16.dp)
+            ) {
+                Text("Back")
+            }
         }
     }
 }
@@ -124,13 +161,16 @@ fun PhotoViewerScreen(
 private const val MIN_SCALE = 1f
 private const val DOUBLE_TAP_SCALE = 2.5f
 private const val MAX_SCALE = 5f
+private const val SCALE_EPSILON = 0.01f
 
-private fun Offset.coerceWithinBounds(scale: Float, size: IntSize): Offset {
-    val maxX = size.width * (scale - MIN_SCALE) / 2f
-    val maxY = size.height * (scale - MIN_SCALE) / 2f
+private fun Offset.coerceWithinBounds(scale: Float, viewport: IntSize): Offset {
+    if (scale <= MIN_SCALE || viewport.width == 0 || viewport.height == 0) return Offset.Zero
+
+    val overflowX = viewport.width * (scale - MIN_SCALE) / 2f
+    val overflowY = viewport.height * (scale - MIN_SCALE) / 2f
 
     return Offset(
-        x = x.coerceIn(-maxX, maxX),
-        y = y.coerceIn(-maxY, maxY)
+        x = x.coerceIn(-overflowX, overflowX),
+        y = y.coerceIn(-overflowY, overflowY)
     )
 }
