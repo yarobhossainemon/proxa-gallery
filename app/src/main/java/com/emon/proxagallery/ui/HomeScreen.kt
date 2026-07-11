@@ -1,5 +1,11 @@
 package com.emon.proxagallery.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -39,6 +45,23 @@ fun HomeScreen(
 
     }
     val photos = List(9) { it }
+
+    val context = LocalContext.current
+
+    val hasPermission = ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.READ_MEDIA_IMAGES
+    ) == PackageManager.PERMISSION_GRANTED
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            println("Permission Granted")
+        } else {
+            println("Permission Denied")
+        }
+    }
 
     Column(
         modifier = modifier.fillMaxSize(),
@@ -88,11 +111,16 @@ fun HomeScreen(
         }
 
         Button(
-            onClick = { }
+            onClick = {
+                if (hasPermission) {
+                    println("Already have permission")
+                } else {
+                    permissionLauncher.launch(Manifest.permission.READ_MEDIA_IMAGES)
+                }
+            }
         ) {
             Text("Open Gallery")
         }
-
     }
 }
 
