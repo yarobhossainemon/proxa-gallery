@@ -1,22 +1,28 @@
 package com.emon.proxagallery.ui
 
-import android.net.Uri
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import com.emon.proxagallery.data.Photo
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 
 private const val GALLERY_ROUTE = "gallery"
-private const val PHOTO_VIEWER_ROUTE = "photo/{photoId}/{photoUri}"
+private const val PHOTO_VIEWER_ROUTE = "photo/{photoId}"
 private const val PHOTO_ID_ARGUMENT = "photoId"
-private const val PHOTO_URI_ARGUMENT = "photoUri"
 
 @Composable
 fun GalleryNavHost(modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val factory = remember(context) { GalleryViewModelFactory(context.applicationContext) }
+    val viewModel: GalleryViewModel = viewModel(factory = factory)
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val navController = rememberNavController()
 
     NavHost(
@@ -26,34 +32,30 @@ fun GalleryNavHost(modifier: Modifier = Modifier) {
     ) {
         composable(GALLERY_ROUTE) {
             HomeScreen(
+                uiState = uiState,
+                onPhotosAccessGranted = viewModel::loadPhotos,
+                onSearchQueryChange = viewModel::onSearchQueryChange,
                 onPhotoClick = { photo ->
-                    navController.navigate(photoViewerRoute(photo))
+                    navController.navigate(photoViewerRoute(photo.id))
                 }
             )
         }
         composable(
             route = PHOTO_VIEWER_ROUTE,
             arguments = listOf(
-                navArgument(PHOTO_ID_ARGUMENT) { type = NavType.LongType },
-                navArgument(PHOTO_URI_ARGUMENT) { type = NavType.StringType }
+                navArgument(PHOTO_ID_ARGUMENT) { type = NavType.LongType }
             )
         ) { backStackEntry ->
             val photoId = backStackEntry.arguments?.getLong(PHOTO_ID_ARGUMENT)
                 ?: return@composable
-            val encodedUri = backStackEntry.arguments?.getString(PHOTO_URI_ARGUMENT)
-                ?: return@composable
-            val photo = Photo(
-                id = photoId,
-                uri = Uri.parse(Uri.decode(encodedUri))
-            )
 
             PhotoViewerScreen(
-                photo = photo,
+                photos = uiState.allPhotos,
+                initialPhotoId = photoId,
                 onBackClick = { navController.popBackStack() }
             )
         }
     }
 }
 
-private fun photoViewerRoute(photo: Photo): String =
-    "photo/${photo.id}/${Uri.encode(photo.uri.toString())}"
+private fun photoViewerRoute(photoId: Long): String = "photo/$photoId"

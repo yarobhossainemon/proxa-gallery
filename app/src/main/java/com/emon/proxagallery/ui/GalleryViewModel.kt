@@ -15,6 +15,7 @@ import kotlinx.coroutines.withContext
 data class GalleryUiState(
     val isLoading: Boolean = true,
     val photos: List<Photo> = emptyList(),
+    val allPhotos: List<Photo> = emptyList(),
     val error: String? = null,
     val searchQuery: String = ""
 )
@@ -49,6 +50,7 @@ class GalleryViewModel(
                 isLoading = false
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
+                    allPhotos = photos,
                     photos = filterPhotos(_uiState.value.searchQuery)
                 )
             } catch (exception: SecurityException) {

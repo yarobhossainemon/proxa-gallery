@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -18,7 +20,8 @@ import com.emon.proxagallery.data.Photo
 
 @Composable
 fun PhotoViewerScreen(
-    photo: Photo,
+    photos: List<Photo>,
+    initialPhotoId: Long,
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -27,12 +30,30 @@ fun PhotoViewerScreen(
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        AsyncImage(
-            model = photo.uri,
-            contentDescription = null,
-            contentScale = ContentScale.Fit,
-            modifier = Modifier.fillMaxSize()
-        )
+        if (photos.isNotEmpty()) {
+            val initialPage = photos.indexOfFirst { photo ->
+                photo.id == initialPhotoId
+            }.coerceAtLeast(0)
+            val pagerState = rememberPagerState(
+                initialPage = initialPage,
+                pageCount = { photos.size }
+            )
+
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier.fillMaxSize(),
+                key = { index -> photos[index].id }
+            ) { page ->
+                val photo = photos[page]
+
+                AsyncImage(
+                    model = photo.uri,
+                    contentDescription = photo.displayName.takeIf { it.isNotBlank() },
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        }
         Button(
             onClick = onBackClick,
             modifier = Modifier
