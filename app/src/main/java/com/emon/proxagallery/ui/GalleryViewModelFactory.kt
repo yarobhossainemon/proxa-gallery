@@ -3,6 +3,7 @@ package com.emon.proxagallery.ui
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import com.emon.proxagallery.data.FavoritesRepository
 import com.emon.proxagallery.data.GalleryRepository
 
 class GalleryViewModelFactory(
@@ -16,6 +17,9 @@ class GalleryViewModelFactory(
         }
 
         @Suppress("UNCHECKED_CAST")
-        return GalleryViewModel(GalleryRepository(appContext)) as T
+        return GalleryViewModel(
+            GalleryRepository(appContext),
+            FavoritesRepository(appContext)
+        ) as T
     }
 }

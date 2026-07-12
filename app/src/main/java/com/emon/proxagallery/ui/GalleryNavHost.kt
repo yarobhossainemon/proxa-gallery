@@ -37,7 +37,10 @@ fun GalleryNavHost(modifier: Modifier = Modifier) {
                 onSearchQueryChange = viewModel::onSearchQueryChange,
                 onPhotoClick = { photo ->
                     navController.navigate(photoViewerRoute(photo.id))
-                }
+                },
+                onToggleFavorite = viewModel::toggleFavorite,
+                onAlbumClick = viewModel::selectAlbum,
+                onLoadMore = viewModel::loadNextPage
             )
         }
         composable(
@@ -50,9 +53,11 @@ fun GalleryNavHost(modifier: Modifier = Modifier) {
                 ?: return@composable
 
             PhotoViewerScreen(
-                photos = uiState.allPhotos,
+                photos = uiState.photos,
                 initialPhotoId = photoId,
-                onBackClick = { navController.popBackStack() }
+                onBackClick = { navController.popBackStack() },
+                favoritePhotoIds = uiState.favoritePhotoIds,
+                onToggleFavorite = viewModel::toggleFavorite
             )
         }
     }
