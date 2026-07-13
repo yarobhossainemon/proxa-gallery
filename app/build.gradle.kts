@@ -52,7 +52,10 @@ dependencies {
     implementation(libs.coil.network.okhttp)
     implementation(libs.coil.video)
     implementation(libs.androidx.datastore.preferences)
+    implementation(libs.androidx.paging.runtime)
+    implementation(libs.androidx.paging.compose)
     testImplementation(libs.junit)
+
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)
