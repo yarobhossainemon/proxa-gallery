@@ -92,12 +92,17 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.emon.proxagallery.data.Album
 import com.emon.proxagallery.data.MediaItem
+import androidx.paging.LoadState
+import androidx.paging.compose.LazyPagingItems
 import kotlinx.coroutines.flow.distinctUntilChanged
 import java.util.Calendar
 
 @Composable
 fun HomeScreen(
     uiState: GalleryUiState,
+    allPhotos: LazyPagingItems<MediaItem>,
+    albumPhotos: LazyPagingItems<MediaItem>,
+    searchPhotos: LazyPagingItems<MediaItem>,
     onPhotosAccessGranted: () -> Unit,
     onSearchQueryChange: (String) -> Unit,
     modifier: Modifier = Modifier,
@@ -114,6 +119,9 @@ fun HomeScreen(
     HomeScreenContent(
         modifier = modifier,
         uiState = uiState,
+        allPhotos = allPhotos,
+        albumPhotos = albumPhotos,
+        searchPhotos = searchPhotos,
         onPhotosAccessGranted = onPhotosAccessGranted,
         onSearchQueryChange = onSearchQueryChange,
         onPhotoClick = onPhotoClick,
@@ -127,6 +135,9 @@ fun HomeScreen(
 @Composable
 private fun HomeScreenContent(
     uiState: GalleryUiState,
+    allPhotos: LazyPagingItems<MediaItem>,
+    albumPhotos: LazyPagingItems<MediaItem>,
+    searchPhotos: LazyPagingItems<MediaItem>,
     onPhotosAccessGranted: () -> Unit,
     onSearchQueryChange: (String) -> Unit,
     onPhotoClick: (MediaItem) -> Unit,
@@ -174,6 +185,9 @@ private fun HomeScreenContent(
     } else {
         GalleryContainer(
             uiState = uiState,
+            allPhotos = allPhotos,
+            albumPhotos = albumPhotos,
+            searchPhotos = searchPhotos,
             onSearchQueryChange = onSearchQueryChange,
             onPhotoClick = onPhotoClick,
             onToggleFavorite = onToggleFavorite,
@@ -254,6 +268,9 @@ private fun PermissionScreen(
 @Composable
 private fun GalleryContainer(
     uiState: GalleryUiState,
+    allPhotos: LazyPagingItems<MediaItem>,
+    albumPhotos: LazyPagingItems<MediaItem>,
+    searchPhotos: LazyPagingItems<MediaItem>,
     onSearchQueryChange: (String) -> Unit,
     onPhotoClick: (MediaItem) -> Unit,
     onToggleFavorite: (Long, Boolean) -> Unit,
@@ -358,12 +375,11 @@ private fun GalleryContainer(
                     }
                 }
 
-                PhotoGridTab(
+                PagedPhotoGridTab(
+                    pagingItems = albumPhotos,
                     uiState = uiState,
-                    photos = uiState.photos,
                     onPhotoClick = onPhotoClick,
-                    onToggleFavorite = onToggleFavorite,
-                    onLoadMore = onLoadMore
+                    onToggleFavorite = onToggleFavorite
                 )
             } else {
                 // Root tabs view
@@ -397,13 +413,12 @@ private fun GalleryContainer(
                             )
                         }
 
-                        PhotoGridTab(
+                        PagedPhotoGridTab(
+                            pagingItems = allPhotos,
                             uiState = uiState,
-                            photos = uiState.photos,
                             gridState = homeGridState,
                             onPhotoClick = onPhotoClick,
-                            onToggleFavorite = onToggleFavorite,
-                            onLoadMore = onLoadMore
+                            onToggleFavorite = onToggleFavorite
                         )
                     }
                     1 -> {
@@ -429,13 +444,12 @@ private fun GalleryContainer(
                             Spacer(Modifier.height(8.dp))
                         }
 
-                        PhotoGridTab(
+                        PagedPhotoGridTab(
+                            pagingItems = searchPhotos,
                             uiState = uiState,
-                            photos = uiState.photos,
                             gridState = searchGridState,
                             onPhotoClick = onPhotoClick,
-                            onToggleFavorite = onToggleFavorite,
-                            onLoadMore = onLoadMore
+                            onToggleFavorite = onToggleFavorite
                         )
                     }
                     2 -> {
@@ -500,6 +514,140 @@ private fun GalleryContainer(
                 onTabSelected = onTabClick,
                 modifier = Modifier.align(Alignment.BottomCenter)
             )
+        }
+    }
+}
+
+@Composable
+private fun PagedPhotoGridTab(
+    pagingItems: LazyPagingItems<MediaItem>,
+    uiState: GalleryUiState,
+    gridState: LazyStaggeredGridState? = null,
+    onPhotoClick: (MediaItem) -> Unit,
+    onToggleFavorite: (Long, Boolean) -> Unit
+) {
+    val actualGridState = gridState ?: rememberLazyStaggeredGridState()
+
+    val refreshState = pagingItems.loadState.refresh
+    val appendState = pagingItems.loadState.append
+
+    when {
+        refreshState is LoadState.Loading && pagingItems.itemCount == 0 -> {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator()
+            }
+        }
+        refreshState is LoadState.Error && pagingItems.itemCount == 0 -> {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = refreshState.error.localizedMessage ?: "Unable to load images.",
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = { pagingItems.retry() },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary
+                        )
+                    ) {
+                        Text("Retry", color = Color.White)
+                    }
+                }
+            }
+        }
+        refreshState is LoadState.NotLoading && pagingItems.itemCount == 0 -> {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "No items found",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = Color.White.copy(alpha = 0.4f)
+                )
+            }
+        }
+        else -> {
+            LazyVerticalStaggeredGrid(
+                state = actualGridState,
+                columns = StaggeredGridCells.Fixed(3),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(
+                    start = 4.dp,
+                    end = 4.dp,
+                    top = 4.dp,
+                    bottom = if (uiState.selectedAlbumId == null) 96.dp else 16.dp
+                )
+            ) {
+                items(
+                    count = pagingItems.itemCount,
+                    key = { index -> pagingItems[index]?.id ?: index.toLong() },
+                    contentType = { index -> 
+                        val item = pagingItems[index]
+                        if (item?.isVideo == true) "video" else "image"
+                    }
+                ) { index ->
+                    val item = pagingItems[index] ?: return@items
+                    val favKey = if (item.isVideo) "v:${item.id}" else "i:${item.id}"
+                    val isFav = favKey in uiState.favoriteKeys
+                    PhotoGridItem(
+                        item = item,
+                        isFavorite = isFav,
+                        onPhotoClick = onPhotoClick,
+                        onToggleFavorite = onToggleFavorite
+                    )
+                }
+
+                if (appendState is LoadState.Loading) {
+                    item(
+                        span = androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan.FullLine,
+                        contentType = { "loading_indicator" }
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(32.dp))
+                        }
+                    }
+                } else if (appendState is LoadState.Error) {
+                    item(
+                        span = androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan.FullLine,
+                        contentType = { "error_indicator" }
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = appendState.error.localizedMessage ?: "Failed to load more items.",
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Button(
+                                onClick = { pagingItems.retry() },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary
+                                )
+                            ) {
+                                Text("Retry", color = Color.White)
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

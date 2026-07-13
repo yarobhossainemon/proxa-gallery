@@ -12,6 +12,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.paging.compose.collectAsLazyPagingItems
 
 private const val GALLERY_ROUTE = "gallery"
 private const val PHOTO_VIEWER_ROUTE = "photo/{photoId}"
@@ -25,6 +26,10 @@ fun GalleryNavHost(modifier: Modifier = Modifier) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val navController = rememberNavController()
 
+    val allPhotos = viewModel.allPhotosFlow.collectAsLazyPagingItems()
+    val albumPhotos = viewModel.albumPhotosFlow.collectAsLazyPagingItems()
+    val searchPhotos = viewModel.searchPhotosFlow.collectAsLazyPagingItems()
+
     NavHost(
         navController = navController,
         startDestination = GALLERY_ROUTE,
@@ -33,6 +38,9 @@ fun GalleryNavHost(modifier: Modifier = Modifier) {
         composable(GALLERY_ROUTE) {
             HomeScreen(
                 uiState = uiState,
+                allPhotos = allPhotos,
+                albumPhotos = albumPhotos,
+                searchPhotos = searchPhotos,
                 onPhotosAccessGranted = viewModel::loadPhotos,
                 onSearchQueryChange = viewModel::onSearchQueryChange,
                 onPhotoClick = { photo ->
