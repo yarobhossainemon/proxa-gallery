@@ -1,15 +1,21 @@
 package com.emon.proxagallery.ui
 
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.emon.proxagallery.data.Album
+import com.emon.proxagallery.data.DeleteResult
 import com.emon.proxagallery.data.FavoritesRepository
 import com.emon.proxagallery.data.GalleryRepository
+import com.emon.proxagallery.data.MediaDetails
 import com.emon.proxagallery.data.MediaItem
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -54,6 +60,10 @@ class GalleryViewModel(
 
     private val _currentAlbumId = MutableStateFlow<Long?>(null)
     private val _searchQuery = MutableStateFlow("")
+
+    /** One-time side effects for the viewer screen (delete dialog, navigate-back, etc.). */
+    private val _viewerEffects = MutableSharedFlow<ViewerEffect>(extraBufferCapacity = 1)
+    val viewerEffects: SharedFlow<ViewerEffect> = _viewerEffects.asSharedFlow()
 
     val allPhotosFlow: Flow<PagingData<MediaItem>> = Pager(
         config = PagingConfig(
@@ -137,6 +147,10 @@ class GalleryViewModel(
         }
     }
 
+    suspend fun getMediaDetails(id: Long): MediaDetails? = withContext(Dispatchers.IO) {
+        galleryRepository.getMediaDetails(id)
+    }
+
     fun prepareViewer(photoId: Long) {
         viewModelScope.launch {
             val ids = withContext(Dispatchers.IO) {
@@ -187,5 +201,57 @@ class GalleryViewModel(
         if (_uiState.value.searchQuery == query) return
         _searchQuery.value = query
         _uiState.value = _uiState.value.copy(searchQuery = query)
+    }
+
+    /**
+     * Initiate deletion of the photo/video with [id] and [uri].
+     * Emits the appropriate [ViewerEffect] to the viewer screen.
+     */
+    fun deleteCurrentPhoto(id: Long, uri: Uri) {
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                galleryRepository.deletePhoto(uri)
+            }
+            when (result) {
+                is DeleteResult.Success -> {
+                    onPhotoDeletedSuccess(id)
+                }
+                is DeleteResult.RequiresPermission -> {
+                    _viewerEffects.emit(
+                        ViewerEffect.LaunchSystemDeleteDialog(result.intentSender)
+                    )
+                }
+                is DeleteResult.Error -> {
+                    // No-op for now; could emit an error effect in the future.
+                }
+            }
+        }
+    }
+
+    /**
+     * Called after the user confirmed the system delete-permission dialog.
+     * On Android 10 we must retry; on Android 11+ the OS already performed the delete.
+     */
+    fun confirmDeleteAfterPermission(id: Long, retryUri: Uri?) {
+        viewModelScope.launch {
+            if (retryUri != null) {
+                // Android 10 — retry the actual deletion.
+                withContext(Dispatchers.IO) {
+                    galleryRepository.retryDelete(retryUri)
+                }
+            }
+            onPhotoDeletedSuccess(id)
+        }
+    }
+
+    private fun onPhotoDeletedSuccess(id: Long) {
+        mediaItemCache.remove(id)
+        val updatedIds = _uiState.value.viewerPhotoIds.filter { it != id }
+        _uiState.value = _uiState.value.copy(viewerPhotoIds = updatedIds)
+        if (updatedIds.isEmpty()) {
+            _viewerEffects.tryEmit(ViewerEffect.NavigateBack)
+        } else {
+            _viewerEffects.tryEmit(ViewerEffect.PhotoDeleted)
+        }
     }
 }

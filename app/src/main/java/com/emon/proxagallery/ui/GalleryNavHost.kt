@@ -1,17 +1,24 @@
 package com.emon.proxagallery.ui
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.paging.compose.collectAsLazyPagingItems
 
 private const val GALLERY_ROUTE = "gallery"
@@ -29,6 +36,46 @@ fun GalleryNavHost(modifier: Modifier = Modifier) {
     val allPhotos = viewModel.allPhotosFlow.collectAsLazyPagingItems()
     val albumPhotos = viewModel.albumPhotosFlow.collectAsLazyPagingItems()
     val searchPhotos = viewModel.searchPhotosFlow.collectAsLazyPagingItems()
+
+    // State that the delete permission launcher needs to communicate back to the ViewModel.
+    var pendingDeleteId by remember { mutableStateOf<Long?>(null) }
+    var pendingDeleteRetryUri by remember { mutableStateOf<Uri?>(null) }
+
+    // Launcher for the OS-level delete-permission dialog (Android 11+).
+    val deleteLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartIntentSenderForResult()
+    ) {
+        val id = pendingDeleteId
+        if (id != null) {
+            viewModel.confirmDeleteAfterPermission(id, pendingDeleteRetryUri)
+            pendingDeleteId = null
+            pendingDeleteRetryUri = null
+        }
+    }
+
+    // Consume one-shot viewer effects.
+    LaunchedEffect(Unit) {
+        viewModel.viewerEffects.collect { effect ->
+            when (effect) {
+                is ViewerEffect.LaunchSystemDeleteDialog -> {
+                    deleteLauncher.launch(
+                        IntentSenderRequest.Builder(effect.intentSender).build()
+                    )
+                }
+                is ViewerEffect.NavigateBack -> {
+                    navController.popBackStack()
+                    allPhotos.refresh()
+                    albumPhotos.refresh()
+                    searchPhotos.refresh()
+                }
+                is ViewerEffect.PhotoDeleted -> {
+                    allPhotos.refresh()
+                    albumPhotos.refresh()
+                    searchPhotos.refresh()
+                }
+            }
+        }
+    }
 
     NavHost(
         navController = navController,
@@ -68,7 +115,13 @@ fun GalleryNavHost(modifier: Modifier = Modifier) {
                 favoriteKeys = uiState.favoriteKeys,
                 albums = uiState.albums,
                 onToggleFavorite = viewModel::toggleFavorite,
-                getMediaItem = viewModel::getMediaItem
+                onDeletePhoto = { id, uri ->
+                    pendingDeleteId = id
+                    pendingDeleteRetryUri = null
+                    viewModel.deleteCurrentPhoto(id, uri)
+                },
+                getMediaItem = viewModel::getMediaItem,
+                getMediaDetails = viewModel::getMediaDetails
             )
         }
     }
