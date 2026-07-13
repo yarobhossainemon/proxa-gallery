@@ -1,6 +1,8 @@
 package com.emon.proxagallery.ui
 
+import android.content.Intent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
@@ -12,12 +14,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -35,6 +39,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -47,7 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
-import com.emon.proxagallery.data.Photo
+import com.emon.proxagallery.data.MediaItem
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -55,12 +60,12 @@ import java.util.Locale
 
 @Composable
 fun PhotoViewerScreen(
-    photos: List<Photo>,
+    photos: List<MediaItem>,
     initialPhotoId: Long,
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier,
-    favoritePhotoIds: Set<Long> = emptySet(),
-    onToggleFavorite: (Long) -> Unit = {}
+    favoriteKeys: Set<String> = emptySet(),
+    onToggleFavorite: (Long, Boolean) -> Unit = { _, _ -> }
 ) {
     var scale by remember { mutableFloatStateOf(MIN_SCALE) }
     var offset by remember { mutableStateOf(Offset.Zero) }
@@ -124,40 +129,70 @@ fun PhotoViewerScreen(
                 userScrollEnabled = scale == MIN_SCALE,
                 key = { index -> photos[index].id }
             ) { page ->
-                val photo = photos[page]
+                val mediaItem = photos[page]
 
-                AsyncImage(
-                    model = photo.uri,
-                    contentDescription = photo.displayName.takeIf { it.isNotBlank() },
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .onSizeChanged { imageSize = it }
-                        .graphicsLayer {
-                            scaleX = scale
-                            scaleY = scale
-                            translationX = offset.x
-                            translationY = offset.y
-                        }
-                        .pointerInput(photo.id) {
-                            detectTapGestures(
-                                onTap = { isUiVisible = !isUiVisible },
-                                onDoubleTap = {
-                                    if (scale == MIN_SCALE) {
-                                        scale = DOUBLE_TAP_SCALE
-                                    } else {
-                                        scale = MIN_SCALE
-                                        offset = Offset.Zero
+                Box(modifier = Modifier.fillMaxSize()) {
+                    AsyncImage(
+                        model = mediaItem.uri,
+                        contentDescription = mediaItem.displayName.takeIf { it.isNotBlank() },
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .onSizeChanged { imageSize = it }
+                            .graphicsLayer {
+                                scaleX = scale
+                                scaleY = scale
+                                translationX = offset.x
+                                translationY = offset.y
+                            }
+                            .pointerInput(mediaItem.id) {
+                                detectTapGestures(
+                                    onTap = { isUiVisible = !isUiVisible },
+                                    onDoubleTap = {
+                                        if (scale == MIN_SCALE) {
+                                            scale = DOUBLE_TAP_SCALE
+                                        } else {
+                                            scale = MIN_SCALE
+                                            offset = Offset.Zero
+                                        }
                                     }
-                                }
+                                )
+                            }
+                            .transformable(
+                                state = transformableState,
+                                canPan = { scale > MIN_SCALE },
+                                lockRotationOnZoomPan = true
                             )
+                    )
+
+                    if (mediaItem.isVideo) {
+                        IconButton(
+                            onClick = {
+                                val intent = Intent(Intent.ACTION_VIEW).apply {
+                                    setDataAndType(mediaItem.uri, "video/*")
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                activity?.startActivity(intent)
+                            },
+                            modifier = Modifier.align(Alignment.Center)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(64.dp)
+                                    .clip(CircleShape)
+                                    .background(Color.Black.copy(alpha = 0.6f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.PlayArrow,
+                                    contentDescription = "Play video",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(40.dp)
+                                )
+                            }
                         }
-                        .transformable(
-                            state = transformableState,
-                            canPan = { scale > MIN_SCALE },
-                            lockRotationOnZoomPan = true
-                        )
-                )
+                    }
+                }
             }
 
             if (isUiVisible) {
@@ -175,16 +210,21 @@ fun PhotoViewerScreen(
                 }
 
                 IconButton(
-                    onClick = { onToggleFavorite(photos[pagerState.currentPage].id) },
+                    onClick = {
+                        val current = photos[pagerState.currentPage]
+                        onToggleFavorite(current.id, current.isVideo)
+                    },
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .statusBarsPadding()
                         .padding(16.dp)
                 ) {
+                    val current = photos[pagerState.currentPage]
+                    val favKey = if (current.isVideo) "v:${current.id}" else "i:${current.id}"
                     Icon(
                         imageVector = Icons.Filled.Favorite,
                         contentDescription = null,
-                        tint = if (photos[pagerState.currentPage].id in favoritePhotoIds) {
+                        tint = if (favKey in favoriteKeys) {
                             Color(0xFFFF1744)
                         } else {
                             Color.White
@@ -193,7 +233,7 @@ fun PhotoViewerScreen(
                 }
 
                 PhotoInfoCard(
-                    photo = photos[pagerState.currentPage],
+                    mediaItem = photos[pagerState.currentPage],
                     modifier = Modifier.align(Alignment.BottomCenter)
                 )
             }
@@ -203,7 +243,7 @@ fun PhotoViewerScreen(
 
 @Composable
 private fun PhotoInfoCard(
-    photo: Photo,
+    mediaItem: MediaItem,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -217,7 +257,7 @@ private fun PhotoInfoCard(
             .padding(horizontal = 20.dp, vertical = 16.dp)
     ) {
         Text(
-            text = photo.displayName,
+            text = mediaItem.displayName,
             color = Color.White,
             fontWeight = FontWeight.Medium,
             fontSize = 16.sp,
@@ -225,8 +265,8 @@ private fun PhotoInfoCard(
             overflow = TextOverflow.Ellipsis
         )
 
-        photo.width?.let { width ->
-            photo.height?.let { height ->
+        mediaItem.width?.let { width ->
+            mediaItem.height?.let { height ->
                 Spacer(Modifier.height(6.dp))
                 Text(
                     text = "${width} × ${height}",
@@ -236,7 +276,7 @@ private fun PhotoInfoCard(
             }
         }
 
-        photo.fileSize?.let { size ->
+        mediaItem.fileSize?.let { size ->
             Spacer(Modifier.height(2.dp))
             Text(
                 text = formatFileSize(size),
@@ -245,7 +285,7 @@ private fun PhotoInfoCard(
             )
         }
 
-        photo.dateTakenMs?.let { dateMs ->
+        mediaItem.dateTakenMs?.let { dateMs ->
             Spacer(Modifier.height(2.dp))
             Text(
                 text = formatDate(dateMs),

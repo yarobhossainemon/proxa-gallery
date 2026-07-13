@@ -6,5 +6,5 @@ data class Album(
     val id: Long,
     val displayName: String,
     val coverPhotoUri: Uri,
-    val photoCount: Int
+    val itemCount: Int
 )

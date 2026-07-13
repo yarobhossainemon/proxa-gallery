@@ -5,7 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.emon.proxagallery.data.Album
 import com.emon.proxagallery.data.FavoritesRepository
 import com.emon.proxagallery.data.GalleryRepository
-import com.emon.proxagallery.data.Photo
+import com.emon.proxagallery.data.MediaItem
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,12 +16,12 @@ import kotlinx.coroutines.withContext
 
 data class GalleryUiState(
     val isLoading: Boolean = true,
-    val photos: List<Photo> = emptyList(),
-    val allPhotos: List<Photo> = emptyList(),
-    val albumPhotos: List<Photo> = emptyList(),
+    val photos: List<MediaItem> = emptyList(),
+    val allPhotos: List<MediaItem> = emptyList(),
+    val albumPhotos: List<MediaItem> = emptyList(),
     val error: String? = null,
     val searchQuery: String = "",
-    val favoritePhotoIds: Set<Long> = emptySet(),
+    val favoriteKeys: Set<String> = emptySet(),
     val albums: List<Album> = emptyList(),
     val selectedAlbumId: Long? = null
 )
@@ -145,7 +145,7 @@ class GalleryViewModel(
         }
     }
 
-    private fun filterPhotos(query: String, sourceOverride: List<Photo>? = null): List<Photo> {
+    private fun filterPhotos(query: String, sourceOverride: List<MediaItem>? = null): List<MediaItem> {
         val source = sourceOverride ?: if (_uiState.value.selectedAlbumId != null) {
             _uiState.value.albumPhotos
         } else {
@@ -154,8 +154,9 @@ class GalleryViewModel(
         val normalizedQuery = query.trim()
         if (normalizedQuery.isEmpty()) return source
 
-        return source.filter { photo ->
-            photo.displayName.contains(normalizedQuery, ignoreCase = true)
+        return source.filter { item ->
+            item.displayName.contains(normalizedQuery, ignoreCase = true) ||
+                item.mimeType.contains(normalizedQuery, ignoreCase = true)
         }
     }
 
@@ -169,20 +170,22 @@ class GalleryViewModel(
 
     private fun observeFavorites() {
         viewModelScope.launch {
-            favoritesRepository.favoriteIds.collect { ids ->
-                _uiState.value = _uiState.value.copy(favoritePhotoIds = ids)
+            favoritesRepository.favoriteKeys.collect { keys ->
+                _uiState.value = _uiState.value.copy(favoriteKeys = keys)
             }
         }
     }
 
-    fun toggleFavorite(photoId: Long) {
+    fun toggleFavorite(id: Long, isVideo: Boolean) {
         viewModelScope.launch {
-            favoritesRepository.toggle(photoId)
+            favoritesRepository.toggle(id, isVideo)
         }
     }
 
-    fun isFavorite(photoId: Long): Boolean =
-        _uiState.value.favoritePhotoIds.contains(photoId)
+    fun isFavorite(id: Long, isVideo: Boolean): Boolean {
+        val key = if (isVideo) "v:$id" else "i:$id"
+        return _uiState.value.favoriteKeys.contains(key)
+    }
 
     fun onSearchQueryChange(query: String) {
         _uiState.value = _uiState.value.copy(

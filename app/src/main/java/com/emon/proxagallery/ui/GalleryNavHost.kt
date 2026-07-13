@@ -56,7 +56,7 @@ fun GalleryNavHost(modifier: Modifier = Modifier) {
                 photos = uiState.photos,
                 initialPhotoId = photoId,
                 onBackClick = { navController.popBackStack() },
-                favoritePhotoIds = uiState.favoritePhotoIds,
+                favoriteKeys = uiState.favoriteKeys,
                 onToggleFavorite = viewModel::toggleFavorite
             )
         }

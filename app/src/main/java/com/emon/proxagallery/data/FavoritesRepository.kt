@@ -19,9 +19,9 @@ class FavoritesRepository(
 ) {
     private val appContext = context.applicationContext
 
-    private val FAVORITES_KEY = stringSetPreferencesKey("favorite_ids")
+    private val FAVORITES_KEY = stringSetPreferencesKey("favorite_keys")
 
-    val favoriteIds: Flow<Set<Long>> = appContext.dataStore.data
+    val favoriteKeys: Flow<Set<String>> = appContext.dataStore.data
         .catch { exception ->
             if (exception is IOException) {
                 emit(emptyPreferences())
@@ -30,18 +30,15 @@ class FavoritesRepository(
             }
         }
         .map { preferences ->
-            preferences[FAVORITES_KEY]
-                ?.mapNotNull { it.toLongOrNull() }
-                ?.toSet()
-                ?: emptySet()
+            preferences[FAVORITES_KEY] ?: emptySet()
         }
 
-    suspend fun toggle(photoId: Long) {
+    suspend fun toggle(id: Long, isVideo: Boolean) {
+        val key = if (isVideo) "v:$id" else "i:$id"
         appContext.dataStore.edit { preferences ->
             val current = preferences[FAVORITES_KEY]?.toMutableSet() ?: mutableSetOf()
-            val idAsString = photoId.toString()
-            if (!current.add(idAsString)) {
-                current.remove(idAsString)
+            if (!current.add(key)) {
+                current.remove(key)
             }
             preferences[FAVORITES_KEY] = current
         }

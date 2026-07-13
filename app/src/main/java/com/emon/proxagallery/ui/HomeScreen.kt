@@ -2,6 +2,7 @@ package com.emon.proxagallery.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -27,6 +29,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -63,7 +66,7 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import kotlinx.coroutines.flow.distinctUntilChanged
 import com.emon.proxagallery.data.Album
-import com.emon.proxagallery.data.Photo
+import com.emon.proxagallery.data.MediaItem
 import com.emon.proxagallery.ui.theme.ProxaGalleryTheme
 import java.util.Calendar
 
@@ -73,8 +76,8 @@ fun HomeScreen(
     onPhotosAccessGranted: () -> Unit,
     onSearchQueryChange: (String) -> Unit,
     modifier: Modifier = Modifier,
-    onPhotoClick: (Photo) -> Unit,
-    onToggleFavorite: (Long) -> Unit = {},
+    onPhotoClick: (MediaItem) -> Unit,
+    onToggleFavorite: (Long, Boolean) -> Unit = { _, _ -> },
     onAlbumClick: (Long?) -> Unit = {},
     onLoadMore: () -> Unit = {}
 ) {
@@ -95,21 +98,29 @@ private fun HomeScreenContent(
     uiState: GalleryUiState,
     onPhotosAccessGranted: () -> Unit,
     onSearchQueryChange: (String) -> Unit,
-    onPhotoClick: (Photo) -> Unit,
-    onToggleFavorite: (Long) -> Unit = {},
+    onPhotoClick: (MediaItem) -> Unit,
+    onToggleFavorite: (Long, Boolean) -> Unit = { _, _ -> },
     onAlbumClick: (Long?) -> Unit = {},
     onLoadMore: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val hasPermission = ContextCompat.checkSelfPermission(
-        context,
-        Manifest.permission.READ_MEDIA_IMAGES
-    ) == PackageManager.PERMISSION_GRANTED
+    val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        ContextCompat.checkSelfPermission(
+            context, Manifest.permission.READ_MEDIA_IMAGES
+        ) == PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(
+                context, Manifest.permission.READ_MEDIA_VIDEO
+            ) == PackageManager.PERMISSION_GRANTED
+    } else {
+        ContextCompat.checkSelfPermission(
+            context, Manifest.permission.READ_EXTERNAL_STORAGE
+        ) == PackageManager.PERMISSION_GRANTED
+    }
     val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { granted ->
+        if (granted.all { it.value }) {
             onPhotosAccessGranted()
         }
     }
@@ -117,7 +128,15 @@ private fun HomeScreenContent(
     if (!hasPermission) {
         PermissionScreen(
             onRequestPermission = {
-                permissionLauncher.launch(Manifest.permission.READ_MEDIA_IMAGES)
+                val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    arrayOf(
+                        Manifest.permission.READ_MEDIA_IMAGES,
+                        Manifest.permission.READ_MEDIA_VIDEO
+                    )
+                } else {
+                    arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+                }
+                permissionLauncher.launch(permissions)
             }
         )
     } else {
@@ -176,8 +195,8 @@ private fun PermissionScreen(
 private fun GalleryContainer(
     uiState: GalleryUiState,
     onSearchQueryChange: (String) -> Unit,
-    onPhotoClick: (Photo) -> Unit,
-    onToggleFavorite: (Long) -> Unit,
+    onPhotoClick: (MediaItem) -> Unit,
+    onToggleFavorite: (Long, Boolean) -> Unit,
     onAlbumClick: (Long?) -> Unit,
     onAlbumClear: () -> Unit,
     onLoadMore: () -> Unit = {}
@@ -296,8 +315,8 @@ private fun GalleryContainer(
 private fun PhotoGridTab(
     uiState: GalleryUiState,
     gridState: LazyGridState? = null,
-    onPhotoClick: (Photo) -> Unit,
-    onToggleFavorite: (Long) -> Unit,
+    onPhotoClick: (MediaItem) -> Unit,
+    onToggleFavorite: (Long, Boolean) -> Unit,
     onLoadMore: () -> Unit = {}
 ) {
     val actualGridState = gridState ?: rememberLazyGridState()
@@ -339,7 +358,9 @@ private fun PhotoGridTab(
                 columns = GridCells.Fixed(3),
                 modifier = Modifier.fillMaxSize()
             ) {
-                items(uiState.photos, key = { photo -> photo.id }) { photo ->
+                items(uiState.photos, key = { item -> item.id }) { item ->
+                    val favKey = if (item.isVideo) "v:${item.id}" else "i:${item.id}"
+
                     Box(
                         modifier = Modifier
                             .padding(4.dp)
@@ -347,7 +368,7 @@ private fun PhotoGridTab(
                     ) {
                         AsyncImage(
                             model = ImageRequest.Builder(LocalContext.current)
-                                .data(photo.uri)
+                                .data(item.uri)
                                 .crossfade(true)
                                 .size(256)
                                 .build(),
@@ -357,13 +378,31 @@ private fun PhotoGridTab(
                                 .fillMaxSize()
                                 .clip(RoundedCornerShape(12.dp))
                                 .background(MaterialTheme.colorScheme.surfaceVariant)
-                                .clickable { onPhotoClick(photo) }
+                                .clickable { onPhotoClick(item) }
                         )
+
+                        if (item.isVideo) {
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.Center)
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(Color.Black.copy(alpha = 0.6f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.PlayArrow,
+                                    contentDescription = "Play video",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                        }
 
                         Icon(
                             imageVector = Icons.Filled.Favorite,
                             contentDescription = null,
-                            tint = if (photo.id in uiState.favoritePhotoIds) {
+                            tint = if (favKey in uiState.favoriteKeys) {
                                 Color(0xFFFF1744)
                             } else {
                                 Color.White.copy(alpha = 0.5f)
@@ -372,7 +411,7 @@ private fun PhotoGridTab(
                                 .align(Alignment.TopEnd)
                                 .padding(4.dp)
                                 .size(18.dp)
-                                .clickable { onToggleFavorite(photo.id) }
+                                .clickable { onToggleFavorite(item.id, item.isVideo) }
                         )
                     }
                 }
@@ -459,7 +498,7 @@ private fun AlbumCard(
                 Spacer(Modifier.height(2.dp))
 
                 Text(
-                    text = "${album.photoCount} ${if (album.photoCount == 1) "photo" else "photos"}",
+                    text = "${album.itemCount} ${if (album.itemCount == 1) "item" else "items"}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
