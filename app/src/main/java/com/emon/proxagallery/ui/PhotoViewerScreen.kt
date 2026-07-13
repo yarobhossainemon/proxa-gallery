@@ -73,13 +73,14 @@ import java.util.Locale
 
 @Composable
 fun PhotoViewerScreen(
-    photos: List<MediaItem>,
+    photoIds: List<Long>,
     initialPhotoId: Long,
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier,
     favoriteKeys: Set<String> = emptySet(),
     albums: List<Album> = emptyList(),
-    onToggleFavorite: (Long, Boolean) -> Unit = { _, _ -> }
+    onToggleFavorite: (Long, Boolean) -> Unit = { _, _ -> },
+    getMediaItem: suspend (Long) -> MediaItem?
 ) {
     var scale by remember { mutableFloatStateOf(MIN_SCALE) }
     var offset by remember { mutableStateOf(Offset.Zero) }
@@ -116,13 +117,11 @@ fun PhotoViewerScreen(
             .fillMaxSize()
             .background(Color(0xFF090B10))
     ) {
-        if (photos.isNotEmpty()) {
-            val initialPage = photos.indexOfFirst { photo ->
-                photo.id == initialPhotoId
-            }.coerceAtLeast(0)
+        if (photoIds.isNotEmpty()) {
+            val initialPage = photoIds.indexOf(initialPhotoId).coerceAtLeast(0)
             val pagerState = rememberPagerState(
                 initialPage = initialPage,
-                pageCount = { photos.size }
+                pageCount = { photoIds.size }
             )
             val transformableState = rememberTransformableState { zoomChange, panChange, _ ->
                 val rawScale = (scale * zoomChange).coerceIn(MIN_SCALE, MAX_SCALE)
@@ -141,153 +140,179 @@ fun PhotoViewerScreen(
                 state = pagerState,
                 modifier = Modifier.fillMaxSize(),
                 userScrollEnabled = scale == MIN_SCALE,
-                key = { index -> photos[index].id }
+                key = { index -> photoIds[index] }
             ) { page ->
-                val mediaItem = photos[page]
+                val photoId = photoIds[page]
+                var mediaItem by remember(photoId) { mutableStateOf<MediaItem?>(null) }
+                LaunchedEffect(photoId) {
+                    mediaItem = getMediaItem(photoId)
+                }
 
                 Box(modifier = Modifier.fillMaxSize()) {
-                    val context = LocalContext.current
-                    val request = remember(mediaItem.uri) {
-                        ImageRequest.Builder(context)
-                            .data(mediaItem.uri)
-                            .crossfade(true)
-                            .build()
-                    }
-                    AsyncImage(
-                        model = request,
-                        contentDescription = mediaItem.displayName.takeIf { it.isNotBlank() },
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .onSizeChanged { imageSize = it }
-                            .graphicsLayer {
-                                scaleX = scale
-                                scaleY = scale
-                                translationX = offset.x
-                                translationY = offset.y
-                            }
-                            .pointerInput(mediaItem.id) {
-                                detectTapGestures(
-                                    onTap = { isUiVisible = !isUiVisible },
-                                    onDoubleTap = {
-                                        if (scale == MIN_SCALE) {
-                                            scale = DOUBLE_TAP_SCALE
-                                        } else {
-                                            scale = MIN_SCALE
-                                            offset = Offset.Zero
+                    val currentMediaItem = mediaItem
+                    if (currentMediaItem != null) {
+                        val context = LocalContext.current
+                        val request = remember(currentMediaItem.uri) {
+                            ImageRequest.Builder(context)
+                                .data(currentMediaItem.uri)
+                                .crossfade(true)
+                                .build()
+                        }
+                        AsyncImage(
+                            model = request,
+                            contentDescription = currentMediaItem.displayName.takeIf { it.isNotBlank() },
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .onSizeChanged { imageSize = it }
+                                .graphicsLayer {
+                                    scaleX = scale
+                                    scaleY = scale
+                                    translationX = offset.x
+                                    translationY = offset.y
+                                }
+                                .pointerInput(currentMediaItem.id) {
+                                    detectTapGestures(
+                                        onTap = { isUiVisible = !isUiVisible },
+                                        onDoubleTap = {
+                                            if (scale == MIN_SCALE) {
+                                                scale = DOUBLE_TAP_SCALE
+                                            } else {
+                                                scale = MIN_SCALE
+                                                offset = Offset.Zero
+                                            }
                                         }
-                                    }
+                                    )
+                                }
+                                .transformable(
+                                    state = transformableState,
+                                    canPan = { scale > MIN_SCALE },
+                                    lockRotationOnZoomPan = true
                                 )
-                            }
-                            .transformable(
-                                state = transformableState,
-                                canPan = { scale > MIN_SCALE },
-                                lockRotationOnZoomPan = true
-                            )
-                    )
+                        )
 
-                    if (mediaItem.isVideo) {
+                        if (currentMediaItem.isVideo) {
+                            IconButton(
+                                onClick = {
+                                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                                        setDataAndType(currentMediaItem.uri, "video/*")
+                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                    }
+                                    activity?.startActivity(intent)
+                                },
+                                modifier = Modifier.align(Alignment.Center)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(80.dp)
+                                        .clip(CircleShape)
+                                        .background(Color.White.copy(alpha = 0.2f))
+                                        .border(1.dp, Color.White.copy(alpha = 0.4f), CircleShape),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.PlayArrow,
+                                        contentDescription = "Play video",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(48.dp)
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            androidx.compose.material3.CircularProgressIndicator(
+                                modifier = Modifier.size(36.dp),
+                                color = Color.White.copy(alpha = 0.3f)
+                            )
+                        }
+                    }
+                }
+            }
+
+            val currentPhotoId = photoIds.getOrNull(pagerState.currentPage)
+            var currentMedia by remember(currentPhotoId) { mutableStateOf<MediaItem?>(null) }
+            LaunchedEffect(currentPhotoId) {
+                if (currentPhotoId != null) {
+                    currentMedia = getMediaItem(currentPhotoId)
+                }
+            }
+
+            val mediaItemToDisplay = currentMedia
+            if (mediaItemToDisplay != null) {
+                // Top controls floating glass bar
+                AnimatedVisibility(
+                    visible = isUiVisible,
+                    enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
+                    exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
+                    modifier = Modifier.align(Alignment.TopCenter)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .statusBarsPadding()
+                            .padding(16.dp)
+                            .height(56.dp)
+                            .clip(RoundedCornerShape(28.dp))
+                            .background(Color(0xD0161A22))
+                            .border(1.dp, Color(0x1AFFFFFF), RoundedCornerShape(28.dp))
+                            .padding(horizontal = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(onClick = onBackClick) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                                contentDescription = "Back",
+                                tint = Color.White
+                            )
+                        }
+
+                        Text(
+                            text = mediaItemToDisplay.displayName,
+                            color = Color.White,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(horizontal = 8.dp)
+                        )
+
                         IconButton(
                             onClick = {
-                                val intent = Intent(Intent.ACTION_VIEW).apply {
-                                    setDataAndType(mediaItem.uri, "video/*")
-                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                }
-                                activity?.startActivity(intent)
-                            },
-                            modifier = Modifier.align(Alignment.Center)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(80.dp)
-                                    .clip(CircleShape)
-                                    .background(Color.White.copy(alpha = 0.2f))
-                                    .border(1.dp, Color.White.copy(alpha = 0.4f), CircleShape),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.PlayArrow,
-                                    contentDescription = "Play video",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(48.dp)
-                                )
+                                onToggleFavorite(mediaItemToDisplay.id, mediaItemToDisplay.isVideo)
                             }
+                        ) {
+                            val favKey = if (mediaItemToDisplay.isVideo) "v:${mediaItemToDisplay.id}" else "i:${mediaItemToDisplay.id}"
+                            Icon(
+                                imageVector = Icons.Rounded.Favorite,
+                                contentDescription = "Favorite",
+                                tint = if (favKey in favoriteKeys) Color(0xFFFF1744) else Color.White
+                            )
                         }
                     }
                 }
-            }
 
-            val currentMedia = photos[pagerState.currentPage]
-
-            // Top controls floating glass bar
-            AnimatedVisibility(
-                visible = isUiVisible,
-                enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
-                exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
-                modifier = Modifier.align(Alignment.TopCenter)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .statusBarsPadding()
-                        .padding(16.dp)
-                        .height(56.dp)
-                        .clip(RoundedCornerShape(28.dp))
-                        .background(Color(0xD0161A22))
-                        .border(1.dp, Color(0x1AFFFFFF), RoundedCornerShape(28.dp))
-                        .padding(horizontal = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                // Bottom info card floating glass panel
+                AnimatedVisibility(
+                    visible = isUiVisible,
+                    enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+                    exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+                    modifier = Modifier.align(Alignment.BottomCenter)
                 ) {
-                    IconButton(onClick = onBackClick) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                            contentDescription = "Back",
-                            tint = Color.White
-                        )
-                    }
-
-                    Text(
-                        text = currentMedia.displayName,
-                        color = Color.White,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(horizontal = 8.dp)
+                    PhotoInfoCard(
+                        mediaItem = mediaItemToDisplay,
+                        favoriteKeys = favoriteKeys,
+                        onToggleFavorite = onToggleFavorite,
+                        albums = albums,
+                        modifier = Modifier.navigationBarsPadding()
                     )
-
-                    IconButton(
-                        onClick = {
-                            onToggleFavorite(currentMedia.id, currentMedia.isVideo)
-                        }
-                    ) {
-                        val favKey = if (currentMedia.isVideo) "v:${currentMedia.id}" else "i:${currentMedia.id}"
-                        Icon(
-                            imageVector = Icons.Rounded.Favorite,
-                            contentDescription = "Favorite",
-                            tint = if (favKey in favoriteKeys) Color(0xFFFF1744) else Color.White
-                        )
-                    }
                 }
-            }
-
-            // Bottom info card floating glass panel
-            AnimatedVisibility(
-                visible = isUiVisible,
-                enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
-                exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
-                modifier = Modifier.align(Alignment.BottomCenter)
-            ) {
-                PhotoInfoCard(
-                    mediaItem = currentMedia,
-                    favoriteKeys = favoriteKeys,
-                    onToggleFavorite = onToggleFavorite,
-                    albums = albums,
-                    modifier = Modifier.navigationBarsPadding()
-                )
             }
         }
     }

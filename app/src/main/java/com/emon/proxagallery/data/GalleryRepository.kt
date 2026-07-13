@@ -298,4 +298,100 @@ class GalleryRepository(
                 ContentUris.withAppendedId(externalContentUri, id)
         }
     }
+
+    fun getPhotoById(id: Long): MediaItem? {
+        val selection = "${MediaStore.Files.FileColumns._ID} = ?"
+        val selectionArgs = arrayOf(id.toString())
+        return queryMediaItems(mediaProjection, selection, selectionArgs, "", 0, 1).firstOrNull()
+    }
+
+    fun getPhotosByIds(ids: List<Long>): List<MediaItem> {
+        if (ids.isEmpty()) return emptyList()
+        val selection = "${MediaStore.Files.FileColumns._ID} IN (${ids.joinToString()})"
+        val selectionArgs = emptyArray<String>()
+        val sortOrder = "${MediaStore.Files.FileColumns.DATE_ADDED} DESC"
+        return queryMediaItems(mediaProjection, selection, selectionArgs, sortOrder, 0, ids.size)
+    }
+
+    fun getAllPhotoIds(): List<Long> {
+        val selection = "${MediaStore.Files.FileColumns.IS_PENDING} = ? AND (" +
+            "${MediaStore.Files.FileColumns.MEDIA_TYPE} = ? OR " +
+            "(${MediaStore.Files.FileColumns.MEDIA_TYPE} = ? AND ${MediaStore.Files.FileColumns.SIZE} >= ?))"
+        val selectionArgs = arrayOf(
+            "0",
+            MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE.toString(),
+            MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO.toString(),
+            "307200"
+        )
+        val sortOrder = "${MediaStore.Files.FileColumns.DATE_ADDED} DESC"
+        return queryMediaIds(selection, selectionArgs, sortOrder)
+    }
+
+    fun getPhotoIdsForAlbum(bucketId: Long): List<Long> {
+        val selection = "${MediaStore.Files.FileColumns.IS_PENDING} = ? AND " +
+            "(${MediaStore.Files.FileColumns.MEDIA_TYPE} = ? OR " +
+            "(${MediaStore.Files.FileColumns.MEDIA_TYPE} = ? AND ${MediaStore.Files.FileColumns.SIZE} >= ?)) AND " +
+            "${MediaStore.Files.FileColumns.BUCKET_ID} = ?"
+        val selectionArgs = arrayOf(
+            "0",
+            MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE.toString(),
+            MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO.toString(),
+            "307200",
+            bucketId.toString()
+        )
+        val sortOrder = "${MediaStore.Files.FileColumns.DATE_ADDED} DESC"
+        return queryMediaIds(selection, selectionArgs, sortOrder)
+    }
+
+    fun getPhotoIdsForSearch(query: String): List<Long> {
+        val cleanQuery = query.trim()
+        if (cleanQuery.isEmpty()) {
+            return getAllPhotoIds()
+        }
+        val selection = "${MediaStore.Files.FileColumns.IS_PENDING} = ? AND (" +
+            "${MediaStore.Files.FileColumns.MEDIA_TYPE} = ? OR " +
+            "(${MediaStore.Files.FileColumns.MEDIA_TYPE} = ? AND ${MediaStore.Files.FileColumns.SIZE} >= ?)) AND (" +
+            "${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ? OR " +
+            "${MediaStore.Files.FileColumns.MIME_TYPE} LIKE ? OR " +
+            "${MediaStore.Files.FileColumns.BUCKET_DISPLAY_NAME} LIKE ?)"
+        
+        val likeArg = "%$cleanQuery%"
+        val selectionArgs = arrayOf(
+            "0",
+            MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE.toString(),
+            MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO.toString(),
+            "307200",
+            likeArg,
+            likeArg,
+            likeArg
+        )
+        val sortOrder = "${MediaStore.Files.FileColumns.DATE_ADDED} DESC"
+        return queryMediaIds(selection, selectionArgs, sortOrder)
+    }
+
+    private fun queryMediaIds(
+        selection: String,
+        selectionArgs: Array<String>,
+        sortOrder: String
+    ): List<Long> {
+        return buildList {
+            val projection = arrayOf(MediaStore.Files.FileColumns._ID)
+            val queryArgs = android.os.Bundle().apply {
+                putString(android.content.ContentResolver.QUERY_ARG_SQL_SELECTION, selection)
+                putStringArray(android.content.ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, selectionArgs)
+                putString(android.content.ContentResolver.QUERY_ARG_SQL_SORT_ORDER, sortOrder)
+            }
+            contentResolver.query(
+                externalContentUri,
+                projection,
+                queryArgs,
+                null
+            )?.use { cursor ->
+                val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns._ID)
+                while (cursor.moveToNext()) {
+                    add(cursor.getLong(idColumn))
+                }
+            }
+        }
+    }
 }

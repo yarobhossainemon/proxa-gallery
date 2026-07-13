@@ -44,12 +44,12 @@ fun GalleryNavHost(modifier: Modifier = Modifier) {
                 onPhotosAccessGranted = viewModel::loadPhotos,
                 onSearchQueryChange = viewModel::onSearchQueryChange,
                 onPhotoClick = { photo ->
+                    viewModel.prepareViewer(photo.id)
                     navController.navigate(photoViewerRoute(photo.id))
                 },
                 onToggleFavorite = viewModel::toggleFavorite,
                 onAlbumClick = viewModel::selectAlbum,
-                onTabClick = viewModel::selectTab,
-                onLoadMore = viewModel::loadNextPage
+                onTabClick = viewModel::selectTab
             )
         }
         composable(
@@ -62,12 +62,13 @@ fun GalleryNavHost(modifier: Modifier = Modifier) {
                 ?: return@composable
 
             PhotoViewerScreen(
-                photos = uiState.photos,
+                photoIds = uiState.viewerPhotoIds,
                 initialPhotoId = photoId,
                 onBackClick = { navController.popBackStack() },
                 favoriteKeys = uiState.favoriteKeys,
                 albums = uiState.albums,
-                onToggleFavorite = viewModel::toggleFavorite
+                onToggleFavorite = viewModel::toggleFavorite,
+                getMediaItem = viewModel::getMediaItem
             )
         }
     }

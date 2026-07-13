@@ -109,8 +109,7 @@ fun HomeScreen(
     onPhotoClick: (MediaItem) -> Unit,
     onToggleFavorite: (Long, Boolean) -> Unit = { _, _ -> },
     onAlbumClick: (Long?) -> Unit = {},
-    onTabClick: (Int) -> Unit = {},
-    onLoadMore: () -> Unit = {}
+    onTabClick: (Int) -> Unit = {}
 ) {
     BackHandler(enabled = uiState.selectedAlbumId != null) {
         onAlbumClick(null)
@@ -127,8 +126,7 @@ fun HomeScreen(
         onPhotoClick = onPhotoClick,
         onToggleFavorite = onToggleFavorite,
         onAlbumClick = onAlbumClick,
-        onTabClick = onTabClick,
-        onLoadMore = onLoadMore
+        onTabClick = onTabClick
     )
 }
 
@@ -144,7 +142,6 @@ private fun HomeScreenContent(
     onToggleFavorite: (Long, Boolean) -> Unit = { _, _ -> },
     onAlbumClick: (Long?) -> Unit = {},
     onTabClick: (Int) -> Unit = {},
-    onLoadMore: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -193,8 +190,7 @@ private fun HomeScreenContent(
             onToggleFavorite = onToggleFavorite,
             onAlbumClick = onAlbumClick,
             onAlbumClear = { onAlbumClick(null) },
-            onTabClick = onTabClick,
-            onLoadMore = onLoadMore
+            onTabClick = onTabClick
         )
     }
 }
@@ -276,8 +272,7 @@ private fun GalleryContainer(
     onToggleFavorite: (Long, Boolean) -> Unit,
     onAlbumClick: (Long?) -> Unit,
     onAlbumClear: () -> Unit,
-    onTabClick: (Int) -> Unit,
-    onLoadMore: () -> Unit = {}
+    onTabClick: (Int) -> Unit
 ) {
     val homeGridState = rememberLazyStaggeredGridState()
     val searchGridState = rememberLazyStaggeredGridState()
@@ -323,13 +318,7 @@ private fun GalleryContainer(
         "$dayOfWeek, $month $dayOfMonth"
     }
 
-    // Filter favorite items locally
-    val favoriteItems = remember(uiState.allPhotos, uiState.favoriteKeys) {
-        uiState.allPhotos.filter { item ->
-            val favKey = if (item.isVideo) "v:${item.id}" else "i:${item.id}"
-            favKey in uiState.favoriteKeys
-        }
-    }
+    val favoriteItems = uiState.favoriteItems
 
     Box(
         modifier = Modifier

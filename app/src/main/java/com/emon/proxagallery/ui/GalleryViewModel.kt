@@ -26,16 +26,15 @@ import kotlinx.coroutines.flow.flatMapLatest
 
 
 data class GalleryUiState(
-    val isLoading: Boolean = true,
-    val photos: List<MediaItem> = emptyList(),
-    val allPhotos: List<MediaItem> = emptyList(),
-    val albumPhotos: List<MediaItem> = emptyList(),
+    val isLoading: Boolean = false,
     val error: String? = null,
     val searchQuery: String = "",
     val favoriteKeys: Set<String> = emptySet(),
+    val favoriteItems: List<MediaItem> = emptyList(),
     val albums: List<Album> = emptyList(),
     val selectedAlbumId: Long? = null,
-    val selectedTab: Int = 0
+    val selectedTab: Int = 0,
+    val viewerPhotoIds: List<Long> = emptyList()
 )
 
 private const val PAGE_SIZE = 100
@@ -103,231 +102,72 @@ class GalleryViewModel(
     }
 
     fun loadPhotos() {
-        if (isLoading || hasLoadedPhotos) return
-
-        isLoading = true
-        allPhotosLoaded = false
         viewModelScope.launch {
-            val loadingState = _uiState.value.copy(isLoading = true, error = null)
-            if (_uiState.value != loadingState) {
-                _uiState.value = loadingState
-            }
-
             try {
-                val loadedPhotos = withContext(Dispatchers.IO) {
-                    galleryRepository.getPhotos(offset = 0, limit = PAGE_SIZE)
-                }
                 val loadedAlbums = withContext(Dispatchers.IO) {
                     galleryRepository.getAlbums()
                 }
-                hasLoadedPhotos = true
-                if (loadedPhotos.size < PAGE_SIZE) {
-                    allPhotosLoaded = true
-                }
-                val updatedState = _uiState.value.copy(
-                    isLoading = false,
-                    allPhotos = loadedPhotos,
+                _uiState.value = _uiState.value.copy(
                     albums = loadedAlbums
                 )
-                val newState = updatedState.copy(
-                    photos = withContext(Dispatchers.Default) {
-                        filterPhotos(updatedState.searchQuery, updatedState, loadedPhotos)
-                    }
-                )
-                if (_uiState.value != newState) {
-                    _uiState.value = newState
-                }
-            } catch (exception: SecurityException) {
-                emitError("Image access permission is required.")
-            } catch (exception: CancellationException) {
-                throw exception
             } catch (exception: Exception) {
-                emitError("Unable to load images.")
-            } finally {
-                isLoading = false
-            }
-        }
-    }
-
-    fun loadNextPage() {
-        if (isLoadingMore || !hasLoadedPhotos || allPhotosLoaded) return
-        
-        val isAlbum = _uiState.value.selectedAlbumId != null
-        val currentList = if (isAlbum) _uiState.value.albumPhotos else _uiState.value.allPhotos
-        if (currentList.isEmpty()) return
-
-        isLoadingMore = true
-        viewModelScope.launch {
-            try {
-                val morePhotos = withContext(Dispatchers.IO) {
-                    if (isAlbum) {
-                        galleryRepository.getPhotosForAlbum(
-                            bucketId = _uiState.value.selectedAlbumId!!,
-                            offset = currentList.size,
-                            limit = PAGE_SIZE
-                        )
-                    } else {
-                        galleryRepository.getPhotos(
-                            offset = currentList.size,
-                            limit = PAGE_SIZE
-                        )
-                    }
-                }
-                if (morePhotos.isEmpty() || morePhotos.size < PAGE_SIZE) {
-                    allPhotosLoaded = true
-                }
-                if (morePhotos.isNotEmpty()) {
-                    val updatedList = currentList + morePhotos
-                    val updatedState = if (isAlbum) {
-                        _uiState.value.copy(albumPhotos = updatedList)
-                    } else {
-                        _uiState.value.copy(allPhotos = updatedList)
-                    }
-                    val newState = updatedState.copy(
-                        photos = withContext(Dispatchers.Default) {
-                            filterPhotos(updatedState.searchQuery, updatedState, updatedList)
-                        }
-                    )
-                    if (_uiState.value != newState) {
-                        _uiState.value = newState
-                    }
-                }
-            } catch (exception: CancellationException) {
-                throw exception
-            } catch (_: Exception) {
-            } finally {
-                isLoadingMore = false
+                _uiState.value = _uiState.value.copy(
+                    error = "Unable to load albums."
+                )
             }
         }
     }
 
     fun selectAlbum(albumId: Long?) {
         _currentAlbumId.value = albumId
-        allPhotosLoaded = false
-        if (albumId == null) {
-            val updatedState = _uiState.value.copy(
-                selectedAlbumId = null,
-                albumPhotos = emptyList()
-            )
-            viewModelScope.launch {
-                val filtered = withContext(Dispatchers.Default) {
-                    filterPhotos(updatedState.searchQuery, updatedState, updatedState.allPhotos)
-                }
-                val newState = updatedState.copy(photos = filtered)
-                if (_uiState.value != newState) {
-                    _uiState.value = newState
-                }
-            }
-        } else {
-            val loadingState = _uiState.value.copy(isLoading = true, error = null)
-            if (_uiState.value != loadingState) {
-                _uiState.value = loadingState
-            }
-            viewModelScope.launch {
-                try {
-                    val loadedAlbumPhotos = withContext(Dispatchers.IO) {
-                        galleryRepository.getPhotosForAlbum(albumId, offset = 0, limit = PAGE_SIZE)
-                    }
-                    if (loadedAlbumPhotos.size < PAGE_SIZE) {
-                        allPhotosLoaded = true
-                    }
-                    val updatedState = _uiState.value.copy(
-                        isLoading = false,
-                        selectedAlbumId = albumId,
-                        albumPhotos = loadedAlbumPhotos
-                    )
-                    val newState = updatedState.copy(
-                        photos = withContext(Dispatchers.Default) {
-                            filterPhotos(updatedState.searchQuery, updatedState, loadedAlbumPhotos)
-                        }
-                    )
-                    if (_uiState.value != newState) {
-                        _uiState.value = newState
-                    }
-                } catch (exception: CancellationException) {
-                    val errorState = _uiState.value.copy(isLoading = false)
-                    if (_uiState.value != errorState) {
-                        _uiState.value = errorState
-                    }
-                    throw exception
-                } catch (exception: Exception) {
-                    val errorState = _uiState.value.copy(
-                        isLoading = false,
-                        error = "Failed to load album."
-                    )
-                    if (_uiState.value != errorState) {
-                        _uiState.value = errorState
-                    }
-                }
-            }
-        }
+        _uiState.value = _uiState.value.copy(selectedAlbumId = albumId)
     }
 
     fun selectTab(tabIndex: Int) {
-        val updatedState = _uiState.value.copy(selectedTab = tabIndex)
+        _uiState.value = _uiState.value.copy(selectedTab = tabIndex)
+    }
+
+    private val mediaItemCache = java.util.concurrent.ConcurrentHashMap<Long, MediaItem>()
+
+    suspend fun getMediaItem(id: Long): MediaItem? {
+        return mediaItemCache[id] ?: withContext(Dispatchers.IO) {
+            galleryRepository.getPhotoById(id)?.also {
+                mediaItemCache[id] = it
+            }
+        }
+    }
+
+    fun prepareViewer(photoId: Long) {
         viewModelScope.launch {
-            val filtered = withContext(Dispatchers.Default) {
-                filterPhotos(updatedState.searchQuery, updatedState)
-            }
-            val newState = updatedState.copy(photos = filtered)
-            if (_uiState.value != newState) {
-                _uiState.value = newState
-            }
-        }
-    }
+            val ids = withContext(Dispatchers.IO) {
+                val currentTab = _uiState.value.selectedTab
+                val albumId = _uiState.value.selectedAlbumId
+                val query = _uiState.value.searchQuery
 
-    private fun filterPhotos(
-        query: String,
-        state: GalleryUiState = _uiState.value,
-        sourceOverride: List<MediaItem>? = null
-    ): List<MediaItem> {
-        val source = sourceOverride ?: if (state.selectedAlbumId != null) {
-            state.albumPhotos
-        } else {
-            state.allPhotos
-        }
-        val normalizedQuery = query.trim()
-        val filtered = if (normalizedQuery.isEmpty()) {
-            source
-        } else {
-            val queryLower = normalizedQuery.lowercase()
-            source.filter { item ->
-                item.displayName.contains(queryLower, ignoreCase = true) ||
-                    item.mimeType.contains(queryLower, ignoreCase = true) ||
-                    item.bucketDisplayName?.contains(queryLower, ignoreCase = true) == true ||
-                    item.fileExtension.contains(queryLower)
+                when {
+                    albumId != null -> galleryRepository.getPhotoIdsForAlbum(albumId)
+                    currentTab == 1 -> galleryRepository.getPhotoIdsForSearch(query)
+                    currentTab == 3 -> _uiState.value.favoriteItems.map { it.id }
+                    else -> galleryRepository.getAllPhotoIds()
+                }
             }
-        }
-
-        return if (state.selectedAlbumId == null && state.selectedTab == 2) {
-            filtered.sortedWith { a, b ->
-                val aTime = maxOf(a.dateTakenMs ?: 0L, (a.dateModifiedSec ?: 0L) * 1000L)
-                val bTime = maxOf(b.dateTakenMs ?: 0L, (b.dateModifiedSec ?: 0L) * 1000L)
-                bTime.compareTo(aTime)
-            }
-        } else {
-            filtered
-        }
-    }
-
-    private fun emitError(message: String) {
-        val newState = _uiState.value.copy(
-            isLoading = false,
-            photos = emptyList(),
-            error = message
-        )
-        if (_uiState.value != newState) {
-            _uiState.value = newState
+            _uiState.value = _uiState.value.copy(viewerPhotoIds = ids)
         }
     }
 
     private fun observeFavorites() {
         viewModelScope.launch {
             favoritesRepository.favoriteKeys.collect { keys ->
-                val newState = _uiState.value.copy(favoriteKeys = keys)
-                if (_uiState.value != newState) {
-                    _uiState.value = newState
+                val favIds = keys.mapNotNull { key ->
+                    key.substringAfter(":").toLongOrNull()
                 }
+                val items = withContext(Dispatchers.IO) {
+                    galleryRepository.getPhotosByIds(favIds)
+                }
+                _uiState.value = _uiState.value.copy(
+                    favoriteKeys = keys,
+                    favoriteItems = items
+                )
             }
         }
     }
@@ -346,15 +186,6 @@ class GalleryViewModel(
     fun onSearchQueryChange(query: String) {
         if (_uiState.value.searchQuery == query) return
         _searchQuery.value = query
-        val updatedState = _uiState.value.copy(searchQuery = query)
-        viewModelScope.launch {
-            val filtered = withContext(Dispatchers.Default) {
-                filterPhotos(query, updatedState)
-            }
-            val newState = updatedState.copy(photos = filtered)
-            if (_uiState.value != newState) {
-                _uiState.value = newState
-            }
-        }
+        _uiState.value = _uiState.value.copy(searchQuery = query)
     }
 }
