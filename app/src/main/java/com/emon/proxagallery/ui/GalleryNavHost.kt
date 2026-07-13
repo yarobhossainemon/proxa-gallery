@@ -40,6 +40,7 @@ fun GalleryNavHost(modifier: Modifier = Modifier) {
                 },
                 onToggleFavorite = viewModel::toggleFavorite,
                 onAlbumClick = viewModel::selectAlbum,
+                onTabClick = viewModel::selectTab,
                 onLoadMore = viewModel::loadNextPage
             )
         }
@@ -57,6 +58,7 @@ fun GalleryNavHost(modifier: Modifier = Modifier) {
                 initialPhotoId = photoId,
                 onBackClick = { navController.popBackStack() },
                 favoriteKeys = uiState.favoriteKeys,
+                albums = uiState.albums,
                 onToggleFavorite = viewModel::toggleFavorite
             )
         }

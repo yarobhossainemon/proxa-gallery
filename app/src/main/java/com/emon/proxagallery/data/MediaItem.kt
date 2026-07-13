@@ -18,10 +18,7 @@ data class MediaItem(
     val durationMs: Long? = null,
     val dateModifiedSec: Long? = null
 ) {
-    val isVideo: Boolean get() = mimeType.startsWith("video/")
-
-    fun getFileExtension(): String {
-        return displayName.substringAfterLast('.', "").lowercase()
-    }
+    val isVideo: Boolean = mimeType.startsWith("video/")
+    val fileExtension: String = displayName.substringAfterLast('.', "").lowercase()
 }
 
