@@ -90,6 +90,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import coil3.imageLoader
 import com.emon.proxagallery.data.Album
 import com.emon.proxagallery.data.MediaItem
 import com.emon.proxagallery.data.MediaDetails
@@ -126,6 +127,8 @@ fun PhotoViewerScreen(
     var showDetailsSheet by remember { mutableStateOf(false) }
 
     val activity = LocalActivity.current
+    val context = LocalContext.current
+    val imageLoader = remember { context.imageLoader }
     val insetsController = remember {
         activity?.window?.let { WindowInsetsControllerCompat(it, it.decorView) }
     }
@@ -281,6 +284,25 @@ fun PhotoViewerScreen(
                 }
             }
 
+            // ── Adjacent image preloading ────────────────────────────────────
+            LaunchedEffect(pagerState.currentPage) {
+                val page = pagerState.currentPage
+                val start = maxOf(0, page - PRELOAD_RANGE)
+                val end = minOf(photoIds.size - 1, page + PRELOAD_RANGE)
+                for (i in start..end) {
+                    if (i == page) continue
+                    val id = photoIds[i]
+                    val item = getMediaItem(id)
+                    if (item != null) {
+                        imageLoader.enqueue(
+                            ImageRequest.Builder(context)
+                                .data(item.uri)
+                                .build()
+                        )
+                    }
+                }
+            }
+
             val mediaItemToDisplay = displayedMedia
 
             // ── Top bar ──────────────────────────────────────────────────────
@@ -346,7 +368,6 @@ fun PhotoViewerScreen(
             }
 
             // ── Bottom action bar ────────────────────────────────────────────
-            val context = LocalContext.current
             val currentItem by rememberUpdatedState(mediaItemToDisplay)
 
             AnimatedVisibility(
@@ -864,6 +885,7 @@ private fun buildMoreActions(
 // Constants and utilities
 // ──────────────────────────────────────────────────────────────────────────────
 
+private const val PRELOAD_RANGE = 2
 private const val MIN_SCALE = 1f
 private const val DOUBLE_TAP_SCALE = 2.5f
 private const val MAX_SCALE = 5f
