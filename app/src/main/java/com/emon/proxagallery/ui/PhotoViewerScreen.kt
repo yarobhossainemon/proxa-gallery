@@ -94,10 +94,6 @@ import coil3.imageLoader
 import com.emon.proxagallery.data.Album
 import com.emon.proxagallery.data.MediaItem
 import com.emon.proxagallery.data.MediaDetails
-import com.emon.proxagallery.util.formatDateMs
-import com.emon.proxagallery.util.formatDateSec
-import com.emon.proxagallery.util.formatDurationMs
-import com.emon.proxagallery.util.formatFileSizeBytes
 import kotlinx.coroutines.launch
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -342,7 +338,10 @@ fun PhotoViewerScreen(
                     Crossfade(
                         targetState = mediaItemToDisplay?.displayName ?: "",
                         animationSpec = tween(durationMillis = 250, easing = FastOutSlowInEasing),
-                        label = "filename"
+                        label = "filename",
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(horizontal = 8.dp)
                     ) { name ->
                         Text(
                             text = name,
@@ -350,10 +349,7 @@ fun PhotoViewerScreen(
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(horizontal = 8.dp)
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
 
@@ -460,8 +456,14 @@ fun PhotoViewerScreen(
                     mediaDetails = getMediaDetails(mediaItemToDisplay.id)
                 }
                 mediaDetails?.let { details ->
-                    DetailsBottomSheet(
-                        mediaDetails = details,
+                    val favKey = if (mediaItemToDisplay.isVideo)
+                        "v:${mediaItemToDisplay.id}" else "i:${mediaItemToDisplay.id}"
+                    MediaDetailsSheet(
+                        details = details,
+                        isFavorite = favKey in favoriteKeys,
+                        onToggleFavorite = {
+                            onToggleFavorite(mediaItemToDisplay.id, mediaItemToDisplay.isVideo)
+                        },
                         onDismiss = { showDetailsSheet = false }
                     )
                 }
@@ -668,188 +670,7 @@ private fun MoreActionRow(
     }
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Details bottom sheet
-// ──────────────────────────────────────────────────────────────────────────────
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun DetailsBottomSheet(
-    mediaDetails: MediaDetails,
-    onDismiss: () -> Unit
-) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = Color(0xFF161A22),
-        dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.3f)) }
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(bottom = 32.dp)
-        ) {
-            Text(
-                text = "Details",
-                color = Color.White,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-            )
-            HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
-
-            Spacer(Modifier.height(8.dp))
-
-            DetailRow(label = "Name", value = mediaDetails.displayName)
-
-            DetailRow(
-                label = "Type",
-                value = if (mediaDetails.isVideo) "Video" else "Photo"
-            )
-
-            if (mediaDetails.mimeType.isNotBlank()) {
-                DetailRow(label = "MIME type", value = mediaDetails.mimeType)
-            }
-
-            if (mediaDetails.width != null && mediaDetails.height != null) {
-                DetailRow(
-                    label = "Resolution",
-                    value = "${mediaDetails.width} × ${mediaDetails.height}"
-                )
-            }
-
-            mediaDetails.fileSize?.let {
-                DetailRow(label = "File size", value = formatFileSizeBytes(it))
-            }
-
-            mediaDetails.dateTakenMs?.let {
-                DetailRow(label = "Date taken", value = formatDateMs(it))
-            }
-
-            mediaDetails.dateAddedMs?.let {
-                DetailRow(label = "Date added", value = formatDateMs(it))
-            }
-
-            mediaDetails.dateModifiedSec?.let {
-                DetailRow(label = "Date modified", value = formatDateSec(it))
-            }
-
-            mediaDetails.bucketDisplayName?.let {
-                DetailRow(label = "Folder", value = it)
-            }
-
-            mediaDetails.relativePath?.let {
-                DetailRow(label = "Relative path", value = it)
-            }
-
-            if (mediaDetails.isVideo) {
-                mediaDetails.durationMs?.let {
-                    DetailRow(label = "Duration", value = formatDurationMs(it))
-                }
-            }
-
-            val hasCameraInfo = mediaDetails.cameraMake != null ||
-                mediaDetails.cameraModel != null ||
-                mediaDetails.lensModel != null ||
-                mediaDetails.aperture != null ||
-                mediaDetails.shutterSpeed != null ||
-                mediaDetails.iso != null ||
-                mediaDetails.focalLength != null ||
-                mediaDetails.flash != null ||
-                mediaDetails.whiteBalance != null
-
-            if (hasCameraInfo) {
-                Spacer(Modifier.height(8.dp))
-                HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
-                Text(
-                    text = "Camera info",
-                    color = Color.White.copy(alpha = 0.6f),
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-                )
-            }
-
-            mediaDetails.cameraMake?.let {
-                DetailRow(label = "Camera make", value = it)
-            }
-
-            mediaDetails.cameraModel?.let {
-                DetailRow(label = "Camera model", value = it)
-            }
-
-            mediaDetails.lensModel?.let {
-                DetailRow(label = "Lens", value = it)
-            }
-
-            mediaDetails.aperture?.let {
-                DetailRow(label = "Aperture", value = it)
-            }
-
-            mediaDetails.shutterSpeed?.let {
-                DetailRow(label = "Shutter speed", value = it)
-            }
-
-            mediaDetails.iso?.let {
-                DetailRow(label = "ISO", value = it)
-            }
-
-            mediaDetails.focalLength?.let {
-                DetailRow(label = "Focal length", value = it)
-            }
-
-            mediaDetails.flash?.let {
-                DetailRow(label = "Flash", value = it)
-            }
-
-            mediaDetails.whiteBalance?.let {
-                DetailRow(label = "White balance", value = it)
-            }
-
-            if (mediaDetails.latitude != null && mediaDetails.longitude != null) {
-                HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
-                Text(
-                    text = "Location",
-                    color = Color.White.copy(alpha = 0.6f),
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-                )
-                DetailRow(
-                    label = "GPS",
-                    value = "${"%.6f".format(mediaDetails.latitude)}, ${"%.6f".format(mediaDetails.longitude)}"
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun DetailRow(label: String, value: String) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 20.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.Top
-    ) {
-        Text(
-            text = label,
-            color = Color.White.copy(alpha = 0.5f),
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Medium,
-            modifier = Modifier.width(90.dp)
-        )
-        Text(
-            text = value,
-            color = Color.White.copy(alpha = 0.9f),
-            fontSize = 13.sp,
-            modifier = Modifier.weight(1f)
-        )
-    }
-}
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Helper: build More actions list

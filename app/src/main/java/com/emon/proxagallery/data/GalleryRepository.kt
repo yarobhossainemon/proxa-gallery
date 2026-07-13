@@ -4,6 +4,7 @@ import android.app.RecoverableSecurityException
 import android.content.ContentUris
 import android.content.Context
 import android.media.ExifInterface
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
@@ -455,7 +456,8 @@ class GalleryRepository(
             MediaStore.Files.FileColumns.BUCKET_ID,
             MediaStore.Files.FileColumns.BUCKET_DISPLAY_NAME,
             MediaStore.Files.FileColumns.RELATIVE_PATH,
-            MediaStore.Files.FileColumns.DURATION
+            MediaStore.Files.FileColumns.DURATION,
+            "orientation"
         )
 
         val selection = "${MediaStore.Files.FileColumns._ID} = ?"
@@ -477,9 +479,26 @@ class GalleryRepository(
                     cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns._ID)
                 )
 
-                val details = MediaDetails(
+                val orientationCol = cursor.getColumnIndex("orientation")
+                val orientationDeg = if (orientationCol >= 0) {
+                    cursor.getInt(orientationCol).takeIf { it > 0 }
+                } else null
+
+                val relPath = cursor.getString(
+                    cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.RELATIVE_PATH)
+                )
+
+                var details = MediaDetails(
                     id = idCol,
-                    uri = mediaItemUri(idCol, mediaType),
+                    uri = if (isVideo) {
+                        ContentUris.withAppendedId(
+                            MediaStore.Video.Media.EXTERNAL_CONTENT_URI, idCol
+                        )
+                    } else {
+                        ContentUris.withAppendedId(
+                            MediaStore.Images.Media.EXTERNAL_CONTENT_URI, idCol
+                        )
+                    },
                     displayName = cursor.getString(
                         cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DISPLAY_NAME)
                     ).orEmpty(),
@@ -511,28 +530,103 @@ class GalleryRepository(
                     bucketDisplayName = cursor.getString(
                         cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.BUCKET_DISPLAY_NAME)
                     ),
-                    relativePath = cursor.getString(
-                        cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.RELATIVE_PATH)
-                    ),
+                    relativePath = relPath,
                     durationMs = cursor.getLong(
                         cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DURATION)
-                    ).takeIf { it > 0 }
+                    ).takeIf { it > 0 },
+                    orientationDegrees = orientationDeg,
+                    storageType = computeStorageType(relPath)
                 )
 
-                return if (!isVideo) {
-                    enrichWithExif(details)
+                details = if (isVideo) {
+                    enrichWithVideoMetadata(details)
                 } else {
-                    details
+                    enrichWithExif(details)
                 }
+
+                return details
             }
         }
         return null
+    }
+
+    private fun computeStorageType(relativePath: String?): String? {
+        if (relativePath == null) return null
+        return when {
+            relativePath.contains("emulated", ignoreCase = true) ||
+                relativePath.startsWith("DCIM") ||
+                relativePath.startsWith("Download") ||
+                relativePath.startsWith("Pictures") ||
+                relativePath.startsWith("Movies") ||
+                relativePath.startsWith("Music") -> "Internal storage"
+            relativePath.startsWith("..") ||
+                relativePath.contains("sdcard", ignoreCase = true) ||
+                relativePath.contains("external", ignoreCase = true) -> "SD card"
+            else -> null
+        }
+    }
+
+    private fun enrichWithVideoMetadata(details: MediaDetails): MediaDetails {
+        val videoProjection = arrayOf(
+            MediaStore.Video.VideoColumns.BITRATE
+        )
+        val selection = "${MediaStore.Video.VideoColumns._ID} = ?"
+        val selectionArgs = arrayOf(details.id.toString())
+
+        var bitrate: Long? = null
+
+        contentResolver.query(
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+            videoProjection,
+            selection,
+            selectionArgs,
+            null
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val bitrateCol = cursor.getColumnIndexOrThrow(MediaStore.Video.VideoColumns.BITRATE)
+                bitrate = cursor.getLong(bitrateCol).takeIf { it > 0 }
+            }
+        }
+
+        var rotation: Int? = null
+
+        try {
+            val retriever = MediaMetadataRetriever()
+            retriever.setDataSource(appContext, details.uri)
+
+            rotation = retriever.extractMetadata(
+                MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION
+            )?.toIntOrNull()?.takeIf { it != 0 && it != -1 }
+
+            retriever.release()
+        } catch (_: Exception) {
+            // Leave rotation as null
+        }
+
+        return details.copy(
+            codec = null,
+            frameRate = null,
+            bitrate = bitrate,
+            rotation = rotation
+        )
     }
 
     private fun enrichWithExif(details: MediaDetails): MediaDetails {
         return try {
             contentResolver.openInputStream(details.uri)?.use { stream ->
                 val exif = ExifInterface(stream)
+
+                val exifOrientation = exif.getAttributeInt(
+                    ExifInterface.TAG_ORIENTATION, -1
+                ).let { value ->
+                    when (value) {
+                        1 -> 0
+                        3 -> 180
+                        6 -> 90
+                        8 -> 270
+                        else -> details.orientationDegrees
+                    }
+                }
 
                 details.copy(
                     cameraMake = exif.getAttribute(ExifInterface.TAG_MAKE)
@@ -557,6 +651,24 @@ class GalleryRepository(
                                 else -> null
                             }
                         },
+                    exposureCompensation = exif.getAttribute(
+                        ExifInterface.TAG_EXPOSURE_BIAS_VALUE
+                    )?.takeIf { it.isNotBlank() && it != "0/1" && it != "0" },
+                    meteringMode = readMeteringMode(exif),
+                    digitalZoom = exif.getAttribute(
+                        ExifInterface.TAG_DIGITAL_ZOOM_RATIO
+                    )?.takeIf { it.isNotBlank() && it != "0/1" && it != "0" },
+                    colorSpace = readColorSpace(exif),
+                    software = exif.getAttribute(ExifInterface.TAG_SOFTWARE)
+                        ?.takeIf { it.isNotBlank() },
+                    artist = exif.getAttribute(ExifInterface.TAG_ARTIST)
+                        ?.takeIf { it.isNotBlank() },
+                    copyright = exif.getAttribute(ExifInterface.TAG_COPYRIGHT)
+                        ?.takeIf { it.isNotBlank() },
+                    bitsPerPixel = exif.getAttributeInt(
+                        ExifInterface.TAG_BITS_PER_SAMPLE, -1
+                    ).takeIf { it > 0 },
+                    orientationDegrees = exifOrientation,
                     latitude = readGpsCoordinate(
                         exif,
                         ExifInterface.TAG_GPS_LATITUDE,
@@ -668,5 +780,31 @@ class GalleryRepository(
             if (num != null && den != null && den > 0) return num / den
         }
         return value.toDoubleOrNull()
+    }
+
+    private fun readMeteringMode(exif: ExifInterface): String? {
+        val raw = exif.getAttributeInt(ExifInterface.TAG_METERING_MODE, -1)
+        if (raw < 0) return null
+        return when (raw) {
+            1 -> "Average"
+            2 -> "Center-weighted average"
+            3 -> "Spot"
+            4 -> "Multi-spot"
+            5 -> "Pattern"
+            6 -> "Partial"
+            255 -> "Other"
+            else -> null
+        }
+    }
+
+    private fun readColorSpace(exif: ExifInterface): String? {
+        val raw = exif.getAttributeInt(ExifInterface.TAG_COLOR_SPACE, -1)
+        if (raw < 0) return null
+        return when (raw) {
+            1 -> "sRGB"
+            2 -> "Adobe RGB"
+            65535 -> "Uncalibrated"
+            else -> null
+        }
     }
 }

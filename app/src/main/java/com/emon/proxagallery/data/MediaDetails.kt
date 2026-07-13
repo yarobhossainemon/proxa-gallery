@@ -3,10 +3,6 @@ package com.emon.proxagallery.data
 import android.net.Uri
 import androidx.compose.runtime.Immutable
 
-/**
- * Rich metadata for a single media item, loaded on demand for the Details sheet.
- * Intentionally separate from [MediaItem] so the lightweight paging model stays lean.
- */
 @Immutable
 data class MediaDetails(
     val id: Long,
@@ -26,10 +22,16 @@ data class MediaDetails(
     val bucketId: Long? = null,
     val bucketDisplayName: String? = null,
     val relativePath: String? = null,
+    val storageType: String? = null,
     // ── Video ──
     val durationMs: Long? = null,
+    val codec: String? = null,
+    val audioCodec: String? = null,
     val frameRate: Float? = null,
     val bitrate: Long? = null,
+    val rotation: Int? = null,
+    val sampleRate: Int? = null,
+    val audioChannels: Int? = null,
     // ── Camera / EXIF (images only) ──
     val cameraMake: String? = null,
     val cameraModel: String? = null,
@@ -41,6 +43,19 @@ data class MediaDetails(
     val flash: String? = null,
     val whiteBalance: String? = null,
     val exposureMode: String? = null,
+    val exposureCompensation: String? = null,
+    val meteringMode: String? = null,
+    val digitalZoom: String? = null,
+    val colorSpace: String? = null,
+    val software: String? = null,
+    val artist: String? = null,
+    val copyright: String? = null,
+    val bitsPerPixel: Int? = null,
+    // ── Orientation ──
+    val orientationDegrees: Int? = null,
+    // ── Color / HDR ──
+    val hdr: Boolean? = null,
+    val wideGamut: Boolean? = null,
     // ── GPS ──
     val latitude: Double? = null,
     val longitude: Double? = null,
