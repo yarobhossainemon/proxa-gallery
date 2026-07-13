@@ -1,8 +1,9 @@
 package com.emon.proxagallery.ui
 
-import android.Manifest
-import android.content.pm.PackageManager
-import android.os.Build
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.emon.proxagallery.util.PermissionHelper
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -86,7 +87,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
+import androidx.compose.runtime.DisposableEffect
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
@@ -145,22 +146,35 @@ private fun HomeScreenContent(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        ContextCompat.checkSelfPermission(
-            context, Manifest.permission.READ_MEDIA_IMAGES
-        ) == PackageManager.PERMISSION_GRANTED &&
-            ContextCompat.checkSelfPermission(
-                context, Manifest.permission.READ_MEDIA_VIDEO
-            ) == PackageManager.PERMISSION_GRANTED
-    } else {
-        ContextCompat.checkSelfPermission(
-            context, Manifest.permission.READ_EXTERNAL_STORAGE
-        ) == PackageManager.PERMISSION_GRANTED
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    // Permission state as mutableState so recomposition triggers on change.
+    var hasPermission by remember {
+        mutableStateOf(PermissionHelper.hasPermission(context))
     }
+
+    // Re-check permission when the app resumes (e.g. user granted it from Settings).
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                val nowGranted = PermissionHelper.hasPermission(context)
+                if (nowGranted && !hasPermission) {
+                    hasPermission = true
+                    onPhotosAccessGranted()
+                } else {
+                    hasPermission = nowGranted
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { granted ->
         if (granted.all { it.value }) {
+            hasPermission = true
             onPhotosAccessGranted()
         }
     }
@@ -168,15 +182,7 @@ private fun HomeScreenContent(
     if (!hasPermission) {
         PermissionScreen(
             onRequestPermission = {
-                val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    arrayOf(
-                        Manifest.permission.READ_MEDIA_IMAGES,
-                        Manifest.permission.READ_MEDIA_VIDEO
-                    )
-                } else {
-                    arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
-                }
-                permissionLauncher.launch(permissions)
+                permissionLauncher.launch(PermissionHelper.requiredPermissions())
             }
         )
     } else {
