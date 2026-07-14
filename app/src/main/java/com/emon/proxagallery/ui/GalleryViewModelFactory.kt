@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import com.emon.proxagallery.data.FavoritesRepository
 import com.emon.proxagallery.data.GalleryRepository
+import com.emon.proxagallery.data.TrashRepository
 
 class GalleryViewModelFactory(
     context: Context
@@ -19,7 +20,8 @@ class GalleryViewModelFactory(
         @Suppress("UNCHECKED_CAST")
         return GalleryViewModel(
             GalleryRepository(appContext),
-            FavoritesRepository(appContext)
+            FavoritesRepository(appContext),
+            TrashRepository(appContext)
         ) as T
     }
 }

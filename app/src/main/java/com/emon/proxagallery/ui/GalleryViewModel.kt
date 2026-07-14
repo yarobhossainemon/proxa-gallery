@@ -4,11 +4,11 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.emon.proxagallery.data.Album
-import com.emon.proxagallery.data.DeleteResult
 import com.emon.proxagallery.data.FavoritesRepository
 import com.emon.proxagallery.data.GalleryRepository
 import com.emon.proxagallery.data.MediaDetails
 import com.emon.proxagallery.data.MediaItem
+import com.emon.proxagallery.data.TrashRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -48,7 +48,8 @@ private const val PREFETCH_DISTANCE = 30
 
 class GalleryViewModel(
     private val galleryRepository: GalleryRepository,
-    private val favoritesRepository: FavoritesRepository
+    private val favoritesRepository: FavoritesRepository,
+    private val trashRepository: TrashRepository
 ) : ViewModel() {
     private var isLoading = false
     private var hasLoadedPhotos = false
@@ -204,27 +205,25 @@ class GalleryViewModel(
     }
 
     /**
-     * Initiate deletion of the photo/video with [id] and [uri].
-     * Emits the appropriate [ViewerEffect] to the viewer screen.
+     * Move the photo/video to Trash, then notify the UI.
+     * The actual MediaStore deletion will be connected in Phase 2.
      */
     fun deleteCurrentPhoto(id: Long, uri: Uri) {
         viewModelScope.launch {
-            val result = withContext(Dispatchers.IO) {
-                galleryRepository.deletePhoto(uri)
-            }
-            when (result) {
-                is DeleteResult.Success -> {
-                    onPhotoDeletedSuccess(id)
-                }
-                is DeleteResult.RequiresPermission -> {
-                    _viewerEffects.emit(
-                        ViewerEffect.LaunchSystemDeleteDialog(result.intentSender)
+            val item = mediaItemCache[id]
+            withContext(Dispatchers.IO) {
+                if (item != null) {
+                    trashRepository.moveToTrash(
+                        mediaId = item.id,
+                        uri = item.uri,
+                        displayName = item.displayName,
+                        mimeType = item.mimeType,
+                        originalAlbum = item.bucketDisplayName
                     )
                 }
-                is DeleteResult.Error -> {
-                    // No-op for now; could emit an error effect in the future.
-                }
+                // TODO Phase 2: call MediaStore.delete() to physically remove the file
             }
+            onPhotoDeletedSuccess(id)
         }
     }
 
