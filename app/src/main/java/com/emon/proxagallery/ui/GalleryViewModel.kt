@@ -4,12 +4,12 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.emon.proxagallery.data.Album
+import com.emon.proxagallery.data.DeleteResult
 import com.emon.proxagallery.data.FavoritesRepository
 import com.emon.proxagallery.data.GalleryRepository
 import com.emon.proxagallery.data.MediaDetails
 import com.emon.proxagallery.data.MediaItem
 import com.emon.proxagallery.data.TrashRepository
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -140,6 +140,13 @@ class GalleryViewModel(
 
     private val mediaItemCache = java.util.concurrent.ConcurrentHashMap<Long, MediaItem>()
 
+    /**
+     * Holds [MediaItem] metadata captured before a delete dialog is launched.
+     * Keyed by media ID so concurrent or rapid deletions are always handled correctly.
+     * Consumed (and removed) only after RESULT_OK is confirmed.
+     */
+    private val pendingTrashItems = java.util.concurrent.ConcurrentHashMap<Long, MediaItem>()
+
     suspend fun getMediaItem(id: Long): MediaItem? {
         return mediaItemCache[id] ?: withContext(Dispatchers.IO) {
             galleryRepository.getPhotoById(id)?.also {
@@ -205,42 +212,88 @@ class GalleryViewModel(
     }
 
     /**
-     * Move the photo/video to Trash, then notify the UI.
-     * The actual MediaStore deletion will be connected in Phase 2.
+     * Initiates deletion for the current photo.
+     *
+     * 1. Captures the full [MediaItem] metadata into [pendingTrashItems] BEFORE any deletion
+     *    attempt — this guarantees the data is available even if the file is physically removed
+     *    during the system dialog (Android 11+).
+     * 2. Delegates to [GalleryRepository.deletePhoto] which follows Scoped Storage rules.
+     * 3. On [DeleteResult.RequiresPermission] emits [ViewerEffect.LaunchSystemDeleteDialog] so
+     *    the UI can present the OS confirmation dialog via the existing [deleteLauncher].
+     * 4. Does NOT update the UI or insert into Room until RESULT_OK is confirmed.
      */
     fun deleteCurrentPhoto(id: Long, uri: Uri) {
         viewModelScope.launch {
+            // Capture metadata now, before any file operation, so we never read a deleted file.
             val item = mediaItemCache[id]
-            withContext(Dispatchers.IO) {
-                if (item != null) {
-                    trashRepository.moveToTrash(
-                        mediaId = item.id,
-                        uri = item.uri,
-                        displayName = item.displayName,
-                        mimeType = item.mimeType,
-                        originalAlbum = item.bucketDisplayName
+            if (item != null) {
+                pendingTrashItems[id] = item
+            }
+
+            val result = withContext(Dispatchers.IO) {
+                galleryRepository.deletePhoto(uri)
+            }
+
+            when (result) {
+                is DeleteResult.RequiresPermission -> {
+                    // Android 11+: retryUri is null (OS handles the physical deletion).
+                    // Android 10:  retryUri is non-null (we must retry after permission).
+                    _viewerEffects.tryEmit(
+                        ViewerEffect.LaunchSystemDeleteDialog(
+                            intentSender = result.intentSender,
+                            retryUri = result.retryUri
+                        )
                     )
                 }
-                // TODO Phase 2: call MediaStore.delete() to physically remove the file
+                is DeleteResult.Success -> {
+                    // Immediate success (own-file deletion without a dialog, uncommon path).
+                    commitDeletion(id)
+                }
+                is DeleteResult.Error -> {
+                    // Deletion failed — discard pending metadata, leave UI unchanged.
+                    pendingTrashItems.remove(id)
+                }
             }
-            onPhotoDeletedSuccess(id)
         }
     }
 
     /**
-     * Called after the user confirmed the system delete-permission dialog.
-     * On Android 10 we must retry; on Android 11+ the OS already performed the delete.
+     * Called after the user confirmed the system delete-permission dialog (RESULT_OK).
+     *
+     * - Android 11+: the OS already physically deleted the file during the dialog; we only
+     *   need to record the deletion in Room and update the UI.
+     * - Android 10: [retryUri] is non-null; we must call [GalleryRepository.retryDelete] first.
      */
     fun confirmDeleteAfterPermission(id: Long, retryUri: Uri?) {
         viewModelScope.launch {
             if (retryUri != null) {
-                // Android 10 — retry the actual deletion.
+                // Android 10 — perform the actual ContentResolver deletion now.
                 withContext(Dispatchers.IO) {
                     galleryRepository.retryDelete(retryUri)
                 }
             }
-            onPhotoDeletedSuccess(id)
+            commitDeletion(id)
         }
+    }
+
+    /**
+     * Inserts the pre-captured [MediaItem] into Room, then updates the UI.
+     * Safe to call from any coroutine context; Room and UI updates are dispatched correctly.
+     */
+    private suspend fun commitDeletion(id: Long) {
+        val item = pendingTrashItems.remove(id)
+        if (item != null) {
+            withContext(Dispatchers.IO) {
+                trashRepository.moveToTrash(
+                    mediaId = item.id,
+                    uri = item.uri,
+                    displayName = item.displayName,
+                    mimeType = item.mimeType,
+                    originalAlbum = item.bucketDisplayName
+                )
+            }
+        }
+        onPhotoDeletedSuccess(id)
     }
 
     private fun onPhotoDeletedSuccess(id: Long) {

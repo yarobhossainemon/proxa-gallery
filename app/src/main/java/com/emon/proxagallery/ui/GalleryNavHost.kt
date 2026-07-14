@@ -1,5 +1,6 @@
 package com.emon.proxagallery.ui
 
+import android.app.Activity
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
@@ -44,10 +45,17 @@ fun GalleryNavHost(modifier: Modifier = Modifier) {
     // Launcher for the OS-level delete-permission dialog (Android 11+).
     val deleteLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartIntentSenderForResult()
-    ) {
-        val id = pendingDeleteId
-        if (id != null) {
-            viewModel.confirmDeleteAfterPermission(id, pendingDeleteRetryUri)
+    ) { result ->
+        // Only proceed if the user explicitly confirmed the system dialog.
+        if (result.resultCode == Activity.RESULT_OK) {
+            val id = pendingDeleteId
+            if (id != null) {
+                viewModel.confirmDeleteAfterPermission(id, pendingDeleteRetryUri)
+                pendingDeleteId = null
+                pendingDeleteRetryUri = null
+            }
+        } else {
+            // User cancelled — discard pending state, leave UI and Room unchanged.
             pendingDeleteId = null
             pendingDeleteRetryUri = null
         }
@@ -58,6 +66,9 @@ fun GalleryNavHost(modifier: Modifier = Modifier) {
         viewModel.viewerEffects.collect { effect ->
             when (effect) {
                 is ViewerEffect.LaunchSystemDeleteDialog -> {
+                    // pendingDeleteId is already set in onDeletePhoto before this effect fires.
+                    // Only the retryUri (Android 10 path) comes from the effect itself.
+                    pendingDeleteRetryUri = effect.retryUri
                     deleteLauncher.launch(
                         IntentSenderRequest.Builder(effect.intentSender).build()
                     )
