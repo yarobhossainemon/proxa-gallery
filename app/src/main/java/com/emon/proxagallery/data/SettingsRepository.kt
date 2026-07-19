@@ -126,4 +126,29 @@ class SettingsRepository(
             preferences[SettingsKeys.THEME_MODE] = mode.ordinal
         }
     }
+
+    /**
+     * Currently selected accent color, or [AccentColor.BLUE] when unset.
+     * The stored int ordinal is mapped back to the enum safely so a corrupt
+     * or out-of-range value can never crash the app.
+     */
+    val accentColor: Flow<AccentColor> = appContext.settingsDataStore.data
+        .catch { exception ->
+            if (exception is IOException) {
+                emit(emptyPreferences())
+            } else {
+                throw exception
+            }
+        }
+        .map { preferences ->
+            val ordinal = preferences[SettingsKeys.ACCENT_COLOR]
+                ?: SettingsKeys.Defaults.DEFAULT_ACCENT_COLOR
+            AccentColor.entries.getOrElse(ordinal) { AccentColor.BLUE }
+        }
+
+    suspend fun setAccentColor(accent: AccentColor) {
+        appContext.settingsDataStore.edit { preferences ->
+            preferences[SettingsKeys.ACCENT_COLOR] = accent.ordinal
+        }
+    }
 }

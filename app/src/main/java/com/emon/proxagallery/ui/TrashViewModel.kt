@@ -78,6 +78,42 @@ class TrashViewModel(
     }
 
     /**
+     * Restore every item currently in Recently Deleted back to MediaStore.
+     *
+     * Reuses the existing [TrashRepository.restoreItem] for each item so the
+     * copy-back-to-MediaStore logic is not duplicated. On completion, invokes
+     * [onRestored] so callers can refresh the main gallery immediately.
+     *
+     * A partial failure (some items restored, some failed) still invokes
+     * [onRestored] because the gallery should refresh for any successful
+     * restores; individual failures are reported via snackbar.
+     */
+    fun restoreAll(onRestored: () -> Unit = {}) {
+        viewModelScope.launch {
+            val items = trashItems.value
+            if (items.isEmpty()) return@launch
+
+            var failCount = 0
+            for (item in items) {
+                val success = withContext(Dispatchers.IO) {
+                    trashRepository.restoreItem(item)
+                }
+                if (!success) failCount++
+            }
+
+            if (failCount == 0) {
+                onRestored()
+                _effects.tryEmit(TrashEffect.RestoreAllSuccess)
+            } else {
+                onRestored()
+                _effects.tryEmit(
+                    TrashEffect.ShowError("$failCount item(s) could not be restored.")
+                )
+            }
+        }
+    }
+
+    /**
      * Permanently delete a single trash item. Used by the unified viewer's
      * "Delete Forever" action after the user confirms via an in-viewer dialog.
      */

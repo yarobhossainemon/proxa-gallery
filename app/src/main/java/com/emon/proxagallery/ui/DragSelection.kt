@@ -4,7 +4,6 @@ import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -15,60 +14,56 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
+
 /**
  * Grid-level drag-selection gesture for the staggered photo grids.
  *
  * Behaviour (Samsung Gallery / Google Photos style):
- * - A long press enters selection mode and selects the row under the pressed
- *   photo (anchor). The whole row is selected, not just the single thumbnail.
- * - While the finger moves, EVERY photo whose vertical extent lies between the
- *   anchor row and the current pointer row is selected — across the FULL width
- *   of the grid. This means dragging through a row selects the entire row, and
- *   dragging across several rows selects every row in between (no skipped items,
- *   no gaps), exactly like Samsung Gallery.
- * - Selection is geometry-based: the pointer position is mapped into the grid's
- *   layout coordinate space (via [LazyStaggeredGridState.layoutInfo]
- *   viewportStartOffset) and a full-width vertical band is built from the anchor
- *   to the current pointer. Every laid-out item whose rectangle overlaps that
- *   band is selected. This is correct for the staggered, variable-height layout.
- * - When the pointer lingers near the top/bottom edge the grid auto-scrolls; the
- *   band is recomputed on every auto-scroll tick (using the live viewport offset)
- *   so newly revealed items are swept into the selection automatically.
- * - Works in both directions (up/down). Releasing the finger ends the gesture;
- *   the selection is preserved. Pre-existing selections are kept.
+ * - A long press enters selection mode and selects the item (and its row
+ *   neighbours) under the pressed point — the anchor.
+ * - While the finger moves, the current item under the pointer is determined by
+ *   hit-testing against [LazyStaggeredGridState.layoutInfo.visibleItemsInfo]
+ *   (geometry). From that the **absolute item index** is read directly from
+ *   [LazyStaggeredGridItemInfo.index].
+ * - The active selection range is always
+ *   `min(anchorIndex, currentIndex) .. max(anchorIndex, currentIndex)`.
+ *   Selection is synchronized against this INDEX range, NOT against visible
+ *   items. Items that have scrolled off-screen stay selected because their
+ *   indices remain inside the range.
+ * - When the pointer lingers near the top/bottom edge the grid auto-scrolls.
+ *   After each scroll tick the pointer position is re-hit-tested (it may now
+ *   fall on a different visible item), the current index is updated, the
+ *   range is recomputed, and selection is re-synchronized.
+ * - Works symmetrically in both directions (up/down). As the finger moves
+ *   back, items that leave the range are unselected. Pre-existing selections
+ *   (made before the drag) are never touched.
+ * - [resolveId] maps an **absolute index** to a media ID. It accesses the full
+ *   data source (PagingData / list), so it works for any index — not just
+ *   currently visible ones. This is why off-screen items keep their selection.
  *
- * Implementation notes — only APIs verified to exist in the project's Compose
- * version are used:
- * - [detectDragGesturesAfterLongPress] (from androidx.compose.foundation.gestures)
- *   handles the long-press → drag sequence and auto-consumes pointer input, so
- *   ordinary scrolling (and per-item tap handling) keeps working when no drag
- *   is active.
- * - [LazyStaggeredGridState.layoutInfo] exposes [androidx.compose.foundation.lazy.LazyLayoutInfo.viewportStartOffset]
- *   and [visibleItemsInfo] (rectangles + absolute indices). The pointer's
- *   viewport-relative Y is converted into the same layout coordinate space using
- *   viewportStartOffset, which updates as the grid scrolls — keeping the band
- *   correct during auto-scroll without any repository queries.
- * - Selecting iterates only the currently visible items (O(visible)), so work
- *   per drag update / auto-scroll tick is bounded regardless of list size.
- * - [LazyStaggeredGridState.scrollBy] (via ScrollableState) drives auto-scroll.
- * - The composable-captured [androidx.compose.runtime.rememberCoroutineScope]
- *   provides the proper [kotlinx.coroutines.CoroutineScope] for the auto-scroll
- *   job (PointerInputScope is a Density, not a CoroutineScope, in Compose 1.10.4).
- *
- * Gesture logic is kept entirely inside this file so HomeScreen stays free of
- * pointer-handling code.
+ * Implementation notes:
+ * - [visibleItemsInfo] is used **only for hit-testing** the pointer position to
+ *   find the current item index. It is never the source of truth for selection.
+ * - Selecting iterates the index range (up to total items), but the per-item
+ *   work is a single set lookup, so even 10 000-item ranges are fast.
+ * - The composable-captured [rememberCoroutineScope] provides the proper
+ *   [kotlinx.coroutines.CoroutineScope] for the auto-scroll job.
  */
 @Composable
 fun Modifier.dragSelection(
     gridState: LazyStaggeredGridState,
     density: Density,
     resolveId: (Int) -> Long?,
-    onSelectPhoto: (Long) -> Unit
+    onSelectPhoto: (Long) -> Unit,
+    onUnselectPhoto: (Long) -> Unit
 ): Modifier {
-    // Proper CoroutineScope tied to this composable's lifecycle. PointerInputScope
-    // is a Density, NOT a CoroutineScope in Compose 1.10.4, so launching directly
-    // inside pointerInput would have no valid scope.
     val scope = rememberCoroutineScope()
+    val currentResolveId by rememberUpdatedState(resolveId)
+    val currentOnSelectPhoto by rememberUpdatedState(onSelectPhoto)
+    val currentOnUnselectPhoto by rememberUpdatedState(onUnselectPhoto)
+
     return this.pointerInput(gridState, density) {
         val autoScrollSpeedPx = with(density) { 18.dp.toPx() }
         val autoScrollZonePx = with(density) { 90.dp.toPx() }
@@ -76,40 +71,83 @@ fun Modifier.dragSelection(
         var autoScrollJob: kotlinx.coroutines.Job? = null
         var autoScrollDir = 0f
 
-        // Pointer Y in viewport space (relative to the grid element). Converted
-        // to layout coordinates via viewportStartOffset when building the band.
-        var anchorVY = 0f
+        // Absolute item indices for the anchor and current pointer position.
+        // These are the two endpoints of the selection range. The range
+        // min(start, current)..max(start, current) covers all items that
+        // should be selected by this drag — regardless of visibility.
+        var anchorIndex = -1
+        var currentIndex = -1
+
+        // Latest viewport-relative pointer Y, kept so the auto-scroll loop
+        // can re-hit-test after each scroll tick. Must be declared before
+        // updateAutoScroll (which captures it).
         var currentVY = 0f
 
-        // Maps a viewport-relative pointer Y into the grid's layout coordinate
-        // space, matching the space of LazyStaggeredGridItemInfo.offset. Using
-        // viewportStartOffset means this stays correct as the grid scrolls.
-        // Declared BEFORE updateAutoScroll/stopAutoScroll so it is a backward
-        // (legal) reference for selectBand and those callers.
-        fun contentY(viewportY: Float): Float =
-            viewportY + gridState.layoutInfo.viewportStartOffset
+        // IDs that were added to the selection BY THE CURRENT drag. Tracking
+        // this set makes reverse-drag deselect work without flickering and
+        // without ever touching pre-existing selections: only these IDs are
+        // eligible for removal when they leave the range.
+        val dragSelectedIds = mutableSetOf<Long>()
 
-        // Selects every currently-visible item whose vertical span overlaps the
-        // full-width band between the anchor and the current pointer. O(visible
-        // items) work; runs each time the band changes. Items not yet visible
-        // (still loading via Paging) are covered automatically later as they
-        // scroll into view and re-trigger selectBand during auto-scroll.
-        // Declared BEFORE updateAutoScroll so the call at line ~108 is a
-        // backward reference (Kotlin forbids forward references to a local
-        // function that captures local variables).
-        fun selectBand() {
-            val anchorY = contentY(anchorVY)
-            val currentY = contentY(currentVY)
-            val top = minOf(anchorY, currentY)
-            val bottom = maxOf(anchorY, currentY)
+        // Total item count from the layout info. Updated each time we need it
+        // so the range iteration stays in sync with Paging appends/refreshes.
+        fun itemCount(): Int = gridState.layoutInfo.totalItemsCount
+
+        /**
+         * Hit-tests a viewport-relative Y against [visibleItemsInfo] to find
+         * which visible item the pointer is over. Returns its **absolute
+         * index**, or -1 if no item is under the pointer.
+         *
+         * This is the ONLY place visibleItemsInfo is used — for pointer
+         * hit-testing, never for selection logic.
+         */
+        fun hitTestIndex(viewportY: Float): Int {
             for (item in gridState.layoutInfo.visibleItemsInfo) {
-                val itemTop = item.offset.y.toFloat()
-                val itemBottom = itemTop + item.size.height
-                // Full-width band: only the vertical overlap matters, so entire
-                // rows the finger crossed are selected (staggered-safe).
-                if (itemBottom >= top && itemTop <= bottom) {
-                    resolveId(item.index)?.let { onSelectPhoto(it) }
+                val top = item.offset.y.toFloat()
+                val bottom = top + item.size.height
+                if (viewportY >= top && viewportY <= bottom) {
+                    return item.index
                 }
+            }
+            return -1
+        }
+
+        /**
+         * Synchronizes the selection with the current drag range.
+         *
+         * The range is `min(anchorIndex, currentIndex)..max(anchorIndex,
+         * currentIndex)`. For every index in that range we resolve the media ID
+         * and select it. For every ID in [dragSelectedIds] that is no longer in
+         * the range, we unselect it.
+         *
+         * Because [resolveId] accesses the full data source (not just visible
+         * items), off-screen items remain correctly selected.
+         */
+        fun syncRange() {
+            if (anchorIndex < 0 || currentIndex < 0) return
+
+            val rangeStart = minOf(anchorIndex, currentIndex)
+            val rangeEnd = maxOf(anchorIndex, currentIndex)
+            val total = itemCount()
+
+            // Collect all IDs currently in the active range.
+            val inRangeIds = mutableSetOf<Long>()
+            for (i in rangeStart..rangeEnd.coerceAtMost(total - 1)) {
+                currentResolveId(i)?.let { inRangeIds.add(it) }
+            }
+
+            // Select newly-entered items.
+            for (id in inRangeIds) {
+                if (dragSelectedIds.add(id)) {
+                    currentOnSelectPhoto(id)
+                }
+            }
+
+            // Deselect items that left the range (reverse drag).
+            val toRemove = dragSelectedIds.filter { it !in inRangeIds }
+            for (id in toRemove) {
+                dragSelectedIds.remove(id)
+                currentOnUnselectPhoto(id)
             }
         }
 
@@ -129,9 +167,11 @@ fun Modifier.dragSelection(
                 autoScrollJob = scope.launch {
                     while (scope.isActive && autoScrollDir != 0f) {
                         gridState.scrollBy(autoScrollDir * autoScrollSpeedPx)
-                        // Re-apply the band after each scroll so items that just
-                        // became visible are swept into the selection.
-                        selectBand()
+                        // Re-hit-test after scroll: the pointer may now fall on
+                        // a different visible item, so the current index updates.
+                        val newIndex = hitTestIndex(currentVY)
+                        if (newIndex >= 0) currentIndex = newIndex
+                        syncRange()
                         delay(16)
                     }
                 }
@@ -146,15 +186,19 @@ fun Modifier.dragSelection(
 
         detectDragGesturesAfterLongPress(
             onDragStart = { startPos ->
-                anchorVY = startPos.y
                 currentVY = startPos.y
-                // Select the whole row under the long-pressed point immediately.
-                selectBand()
+                dragSelectedIds.clear()
+                // Hit-test to find the anchor item index.
+                anchorIndex = hitTestIndex(startPos.y)
+                currentIndex = anchorIndex
+                syncRange()
                 updateAutoScroll(startPos.y)
             },
             onDrag = { change, _ ->
                 currentVY = change.position.y
-                selectBand()
+                val newIndex = hitTestIndex(change.position.y)
+                if (newIndex >= 0) currentIndex = newIndex
+                syncRange()
                 updateAutoScroll(change.position.y)
             },
             onDragEnd = { stopAutoScroll() },

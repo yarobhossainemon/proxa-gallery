@@ -49,15 +49,21 @@ import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Restore
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Wallpaper
+import androidx.compose.material.icons.rounded.DeleteForever
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomSheetDefaults
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -91,10 +97,32 @@ import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import coil3.imageLoader
+import coil3.size.Precision
+import coil3.size.Scale
 import com.emon.proxagallery.data.Album
 import com.emon.proxagallery.data.MediaItem
 import com.emon.proxagallery.data.MediaDetails
+import com.emon.proxagallery.ui.theme.DeleteRed
+import com.emon.proxagallery.ui.theme.FavoriteRed
+import com.emon.proxagallery.ui.theme.RestoreBlue
 import kotlinx.coroutines.launch
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Theme-aware "glass" colors for the floating control bars.
+//
+// The photo canvas itself stays pure black in every theme (it is an image
+// viewing surface, like every gallery/cinema app), but the floating top bar,
+// the bottom action bar and the page indicator pills are translucent "glass"
+// overlays — so they pick up the active surface color and read correctly on
+// both dark and light themes.
+// ──────────────────────────────────────────────────────────────────────────────
+private val ViewerCanvasColor = Color.Black
+
+@Composable
+private fun viewerGlassColor(): Color = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f)
+
+@Composable
+private fun viewerGlassBorder(): Color = MaterialTheme.colorScheme.outline
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Screen entry point
@@ -102,15 +130,19 @@ import kotlinx.coroutines.launch
 
 @Composable
 fun PhotoViewerScreen(
-    photoIds: List<Long>,
-    initialPhotoId: Long,
+    itemIds: List<Long>,
+    initialItemId: Long,
     onBackClick: () -> Unit,
+    resolveViewerItem: suspend (Long) -> ViewerItem?,
+    mode: ViewerMode = ViewerMode.GALLERY,
     modifier: Modifier = Modifier,
     favoriteKeys: Set<String> = emptySet(),
     albums: List<Album> = emptyList(),
     onToggleFavorite: (Long, Boolean) -> Unit = { _, _ -> },
     onDeletePhoto: (id: Long, uri: Uri) -> Unit = { _, _ -> },
-    getMediaItem: suspend (Long) -> MediaItem?,
+    onRestore: (ViewerItem) -> Unit = {},
+    onDeleteForever: (ViewerItem) -> Unit = {},
+    getMediaItem: suspend (Long) -> MediaItem? = { null },
     getMediaDetails: suspend (Long) -> MediaDetails? = { null }
 ) {
     var scale by remember { mutableFloatStateOf(MIN_SCALE) }
@@ -121,6 +153,9 @@ fun PhotoViewerScreen(
     // Bottom-sheet state
     var showMoreSheet by remember { mutableStateOf(false) }
     var showDetailsSheet by remember { mutableStateOf(false) }
+
+    // Trash-only: confirm before permanently deleting the current item.
+    var showDeleteForeverDialog by remember { mutableStateOf(false) }
 
     val activity = LocalActivity.current
     val context = LocalContext.current
@@ -152,13 +187,13 @@ fun PhotoViewerScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(Color(0xFF090B10))
+            .background(ViewerCanvasColor)
     ) {
-        if (photoIds.isNotEmpty()) {
-            val initialPage = photoIds.indexOf(initialPhotoId).coerceAtLeast(0)
+        if (itemIds.isNotEmpty()) {
+            val initialPage = itemIds.indexOf(initialItemId).coerceAtLeast(0)
             val pagerState = rememberPagerState(
                 initialPage = initialPage,
-                pageCount = { photoIds.size }
+                pageCount = { itemIds.size }
             )
             val transformableState = rememberTransformableState { zoomChange, panChange, _ ->
                 val rawScale = (scale * zoomChange).coerceIn(MIN_SCALE, MAX_SCALE)
@@ -177,27 +212,30 @@ fun PhotoViewerScreen(
                 state = pagerState,
                 modifier = Modifier.fillMaxSize(),
                 userScrollEnabled = scale == MIN_SCALE,
-                key = { index -> photoIds[index] }
+                key = { index -> itemIds[index] }
             ) { page ->
-                val photoId = photoIds[page]
-                var mediaItem by remember(photoId) { mutableStateOf<MediaItem?>(null) }
-                LaunchedEffect(photoId) {
-                    mediaItem = getMediaItem(photoId)
+                val itemId = itemIds[page]
+                var viewerItem by remember(itemId) { mutableStateOf<ViewerItem?>(null) }
+                LaunchedEffect(itemId) {
+                    viewerItem = resolveViewerItem(itemId)
                 }
 
                 Box(modifier = Modifier.fillMaxSize()) {
-                    val currentMediaItem = mediaItem
-                    if (currentMediaItem != null) {
+                    val current = viewerItem
+                    if (current != null) {
                         val context = LocalContext.current
-                        val request = remember(currentMediaItem.uri) {
+                        val request = remember(current.imageData) {
                             ImageRequest.Builder(context)
-                                .data(currentMediaItem.uri)
+                                .data(current.imageData)
+                                // Reuse the thumbnail that the grid already put in
+                                // memory cache — shows instantly while full-res loads.
+                                .placeholderMemoryCacheKey(current.imageData.toString())
                                 .crossfade(true)
                                 .build()
                         }
                         AsyncImage(
                             model = request,
-                            contentDescription = currentMediaItem.displayName.takeIf { it.isNotBlank() },
+                            contentDescription = current.displayName.takeIf { it.isNotBlank() },
                             contentScale = ContentScale.Fit,
                             modifier = Modifier
                                 .fillMaxSize()
@@ -208,7 +246,7 @@ fun PhotoViewerScreen(
                                     translationX = offset.x
                                     translationY = offset.y
                                 }
-                                .pointerInput(currentMediaItem.id) {
+                                .pointerInput(current.id) {
                                     detectTapGestures(
                                         onTap = { isUiVisible = !isUiVisible },
                                         onDoubleTap = {
@@ -228,11 +266,13 @@ fun PhotoViewerScreen(
                                 )
                         )
 
-                        if (currentMediaItem.isVideo) {
+                        // Video playback is only available in gallery mode: trashed files are
+                        // no longer addressable via MediaStore, so there is no Uri to hand off.
+                        if (mode == ViewerMode.GALLERY && current.isVideo && current.videoUri != null) {
                             IconButton(
                                 onClick = {
                                     val intent = Intent(Intent.ACTION_VIEW).apply {
-                                        setDataAndType(currentMediaItem.uri, "video/*")
+                                        setDataAndType(current.videoUri, "video/*")
                                         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                     }
                                     activity?.startActivity(intent)
@@ -270,29 +310,53 @@ fun PhotoViewerScreen(
                 }
             }
 
-            val currentPhotoId = photoIds.getOrNull(pagerState.currentPage)
+            val currentItemId = itemIds.getOrNull(pagerState.currentPage)
 
+            // Gallery only: the MediaItem backing the action bar (share/edit/favorite/delete)
+            // and the Details sheet. Not needed in trash mode, which acts on ViewerItem directly.
             var displayedMedia by remember { mutableStateOf<MediaItem?>(null) }
-            LaunchedEffect(currentPhotoId) {
-                if (currentPhotoId != null) {
-                    val loaded = getMediaItem(currentPhotoId)
+            LaunchedEffect(currentItemId) {
+                if (mode == ViewerMode.GALLERY && currentItemId != null) {
+                    val loaded = getMediaItem(currentItemId)
                     if (loaded != null) displayedMedia = loaded
+                } else if (mode != ViewerMode.GALLERY) {
+                    // Avoid carrying a stale MediaItem across modes.
+                    displayedMedia = null
                 }
             }
 
-            // ── Adjacent image preloading ────────────────────────────────────
+            // Both modes: the ViewerItem for the current page (top-bar filename and, in
+            // trash mode, the Restore / Delete Forever targets).
+            var currentViewerItem by remember { mutableStateOf<ViewerItem?>(null) }
+            LaunchedEffect(currentItemId) {
+                currentViewerItem = if (currentItemId != null) resolveViewerItem(currentItemId) else null
+            }
+
+            // ── Adjacent image preloading (gallery only) ────────────────────
             LaunchedEffect(pagerState.currentPage) {
+                if (mode != ViewerMode.GALLERY) return@LaunchedEffect
                 val page = pagerState.currentPage
                 val start = maxOf(0, page - PRELOAD_RANGE)
-                val end = minOf(photoIds.size - 1, page + PRELOAD_RANGE)
+                val end = minOf(itemIds.size - 1, page + PRELOAD_RANGE)
+                val displayMetrics = context.resources.displayMetrics
+                val displayW = displayMetrics.widthPixels
+                val displayH = displayMetrics.heightPixels
                 for (i in start..end) {
                     if (i == page) continue
-                    val id = photoIds[i]
+                    val id = itemIds[i]
                     val item = getMediaItem(id)
                     if (item != null) {
                         imageLoader.enqueue(
                             ImageRequest.Builder(context)
                                 .data(item.uri)
+                                // Bound the preload to screen size — never decode
+                                // a 3084×4096 bitmap for an adjacent page that may
+                                // never be visited. Saves ~180 MB per swipe.
+                                .size(displayW, displayH)
+                                .precision(Precision.INEXACT)
+                                .scale(Scale.FIT)
+                                .memoryCacheKey(item.uri.toString())
+                                .diskCacheKey(item.uri.toString())
                                 .build()
                         )
                     }
@@ -321,8 +385,8 @@ fun PhotoViewerScreen(
                         .padding(16.dp)
                         .height(56.dp)
                         .clip(RoundedCornerShape(28.dp))
-                        .background(Color(0xD0161A22))
-                        .border(1.dp, Color(0x1AFFFFFF), RoundedCornerShape(28.dp))
+                        .background(viewerGlassColor())
+                        .border(1.dp, viewerGlassBorder(), RoundedCornerShape(28.dp))
                         .padding(horizontal = 8.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
@@ -331,34 +395,50 @@ fun PhotoViewerScreen(
                         Icon(
                             imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
                             contentDescription = "Back",
-                            tint = Color.White
+                            tint = MaterialTheme.colorScheme.onSurface
                         )
                     }
 
                     Crossfade(
-                        targetState = mediaItemToDisplay?.displayName ?: "",
+                        targetState = currentViewerItem?.displayName
+                            ?: mediaItemToDisplay?.displayName
+                            ?: "",
                         animationSpec = tween(durationMillis = 250, easing = FastOutSlowInEasing),
                         label = "filename",
                         modifier = Modifier
                             .weight(1f)
                             .padding(horizontal = 8.dp)
                     ) { name ->
-                        Text(
-                            text = name,
-                            color = Color.White,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                        Column {
+                            Text(
+                                text = name,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (itemIds.size > 1) {
+                                Text(
+                                    text = "${pagerState.currentPage + 1} / ${itemIds.size}",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
                     }
 
-                    IconButton(onClick = { showDetailsSheet = true }) {
-                        Icon(
-                            imageVector = Icons.Rounded.Info,
-                            contentDescription = "Details",
-                            tint = Color.White
-                        )
+                    if (mode == ViewerMode.GALLERY) {
+                        IconButton(onClick = { showDetailsSheet = true }) {
+                            Icon(
+                                imageVector = Icons.Rounded.Info,
+                                contentDescription = "Details",
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    } else {
+                        Spacer(Modifier.width(48.dp))
                     }
                 }
             }
@@ -378,45 +458,57 @@ fun PhotoViewerScreen(
                 ) + fadeOut(animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing)),
                 modifier = Modifier.align(Alignment.BottomCenter)
             ) {
-                val favKey = currentItem?.let {
-                    if (it.isVideo) "v:${it.id}" else "i:${it.id}"
-                } ?: ""
-                val isFavorite = favKey.isNotEmpty() && favKey in favoriteKeys
+                when (mode) {
+                    ViewerMode.GALLERY -> {
+                        val favKey = currentItem?.let {
+                            if (it.isVideo) "v:${it.id}" else "i:${it.id}"
+                        } ?: ""
+                        val isFavorite = favKey.isNotEmpty() && favKey in favoriteKeys
 
-                ViewerActionBar(
-                    isFavorite = isFavorite,
-                    onShare = {
-                        currentItem?.let { item ->
-                            val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                                type = item.mimeType.ifBlank { "*/*" }
-                                putExtra(Intent.EXTRA_STREAM, item.uri)
-                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                            }
-                            context.startActivity(Intent.createChooser(shareIntent, "Share"))
-                        }
-                    },
-                    onEdit = {
-                        currentItem?.let { item ->
-                            val editIntent = Intent(Intent.ACTION_EDIT).apply {
-                                setDataAndType(item.uri, item.mimeType.ifBlank { "*/*" })
-                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                            }
-                            context.startActivity(Intent.createChooser(editIntent, "Edit"))
-                        }
-                    },
-                    onFavorite = {
-                        currentItem?.let { onToggleFavorite(it.id, it.isVideo) }
-                    },
-                    onDelete = {
-                        currentItem?.let { onDeletePhoto(it.id, it.uri) }
-                    },
-                    onMore = { showMoreSheet = true },
-                    modifier = Modifier.navigationBarsPadding()
-                )
+                        ViewerActionBar(
+                            isFavorite = isFavorite,
+                            onShare = {
+                                currentItem?.let { item ->
+                                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                        type = item.mimeType.ifBlank { "*/*" }
+                                        putExtra(Intent.EXTRA_STREAM, item.uri)
+                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                    }
+                                    context.startActivity(Intent.createChooser(shareIntent, "Share"))
+                                }
+                            },
+                            onEdit = {
+                                currentItem?.let { item ->
+                                    val editIntent = Intent(Intent.ACTION_EDIT).apply {
+                                        setDataAndType(item.uri, item.mimeType.ifBlank { "*/*" })
+                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                    }
+                                    context.startActivity(Intent.createChooser(editIntent, "Edit"))
+                                }
+                            },
+                            onFavorite = {
+                                currentItem?.let { onToggleFavorite(it.id, it.isVideo) }
+                            },
+                            onDelete = {
+                                currentItem?.let { onDeletePhoto(it.id, it.uri) }
+                            },
+                            onMore = { showMoreSheet = true },
+                            modifier = Modifier.navigationBarsPadding()
+                        )
+                    }
+
+                    ViewerMode.TRASH -> {
+                        TrashActionBar(
+                            onRestore = { currentViewerItem?.let(onRestore) },
+                            onDeleteForever = { showDeleteForeverDialog = true },
+                            modifier = Modifier.navigationBarsPadding()
+                        )
+                    }
+                }
             }
 
-            // ── More bottom sheet ────────────────────────────────────────────
-            if (showMoreSheet && mediaItemToDisplay != null) {
+            // ── More bottom sheet (gallery only) ────────────────────────────
+            if (mode == ViewerMode.GALLERY && showMoreSheet && mediaItemToDisplay != null) {
                 val moreCtx = LocalContext.current
                 val moreActions = remember(mediaItemToDisplay) {
                     buildMoreActions(
@@ -449,8 +541,8 @@ fun PhotoViewerScreen(
                 )
             }
 
-            // ── Details bottom sheet ─────────────────────────────────────────
-            if (showDetailsSheet && mediaItemToDisplay != null) {
+            // ── Details bottom sheet (gallery only) ─────────────────────────
+            if (mode == ViewerMode.GALLERY && showDetailsSheet && mediaItemToDisplay != null) {
                 var mediaDetails by remember { mutableStateOf<MediaDetails?>(null) }
                 LaunchedEffect(mediaItemToDisplay.id) {
                     mediaDetails = getMediaDetails(mediaItemToDisplay.id)
@@ -468,12 +560,85 @@ fun PhotoViewerScreen(
                     )
                 }
             }
+
+            // ── Delete-forever confirmation (trash only) ────────────────────
+            if (showDeleteForeverDialog && currentViewerItem != null) {
+                AlertDialog(
+                    onDismissRequest = { showDeleteForeverDialog = false },
+                    title = { Text("Delete forever?") },
+                    text = {
+                        Text(
+                            "This item will be permanently removed from Recently Deleted.\n" +
+                                "This action cannot be undone."
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                val target = currentViewerItem
+                                showDeleteForeverDialog = false
+                                if (target != null) onDeleteForever(target)
+                            },
+                            colors = ButtonDefaults.textButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error
+                            )
+                        ) {
+                            Text("Delete Forever")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showDeleteForeverDialog = false }) {
+                            Text("Cancel")
+                        }
+                    }
+                )
+            }
         }
     }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// ViewerActionBar — 5-button bottom action strip
+// TrashActionBar — 2-button bottom action strip (Restore + Delete Forever)
+// ──────────────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun TrashActionBar(
+    onRestore: () -> Unit,
+    onDeleteForever: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .clip(RoundedCornerShape(32.dp))
+            .background(viewerGlassColor())
+            .border(1.dp, viewerGlassBorder(), RoundedCornerShape(32.dp))
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            ActionBarButton(
+                icon = Icons.Rounded.Restore,
+                label = "Restore",
+                tint = RestoreBlue,
+                onClick = onRestore
+            )
+            ActionBarButton(
+                icon = Icons.Rounded.DeleteForever,
+                label = "Delete Forever",
+                tint = DeleteRed,
+                onClick = onDeleteForever
+            )
+        }
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// ViewerActionBar — 5-button bottom action strip (gallery mode)
 // ──────────────────────────────────────────────────────────────────────────────
 
 @Composable
@@ -486,13 +651,15 @@ private fun ViewerActionBar(
     onMore: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val onSurface = MaterialTheme.colorScheme.onSurface
+
     Box(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 12.dp)
             .clip(RoundedCornerShape(32.dp))
-            .background(Color(0xD0161A22))
-            .border(1.dp, Color(0x1AFFFFFF), RoundedCornerShape(32.dp))
+            .background(viewerGlassColor())
+            .border(1.dp, viewerGlassBorder(), RoundedCornerShape(32.dp))
             .padding(horizontal = 8.dp, vertical = 4.dp)
     ) {
         Row(
@@ -503,13 +670,13 @@ private fun ViewerActionBar(
             ActionBarButton(
                 icon = Icons.Rounded.Share,
                 label = "Share",
-                tint = Color.White,
+                tint = onSurface,
                 onClick = onShare
             )
             ActionBarButton(
                 icon = Icons.Rounded.Edit,
                 label = "Edit",
-                tint = Color.White,
+                tint = onSurface,
                 onClick = onEdit
             )
             AnimatedContent(
@@ -523,20 +690,20 @@ private fun ViewerActionBar(
                 ActionBarButton(
                     icon = if (fav) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
                     label = if (fav) "Liked" else "Like",
-                    tint = if (fav) Color(0xFFFF1744) else Color.White,
+                    tint = if (fav) FavoriteRed else onSurface,
                     onClick = onFavorite
                 )
             }
             ActionBarButton(
                 icon = Icons.Rounded.Delete,
                 label = "Delete",
-                tint = Color(0xFFFF5252),
+                tint = DeleteRed,
                 onClick = onDelete
             )
             ActionBarButton(
                 icon = Icons.Rounded.MoreVert,
                 label = "More",
-                tint = Color.White,
+                tint = onSurface,
                 onClick = onMore
             )
         }
@@ -559,7 +726,7 @@ private fun ActionBarButton(
             modifier = Modifier
                 .size(52.dp)
                 .clip(CircleShape)
-                .background(Color.White.copy(alpha = 0.07f))
+                .background(MaterialTheme.colorScheme.outlineVariant)
         ) {
             Icon(
                 imageVector = icon,
@@ -571,7 +738,7 @@ private fun ActionBarButton(
         Spacer(Modifier.height(2.dp))
         Text(
             text = label,
-            color = Color.White.copy(alpha = 0.7f),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontSize = 10.sp,
             fontWeight = FontWeight.Medium
         )
@@ -594,8 +761,7 @@ private fun MoreBottomSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = Color(0xFF161A22),
-        dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.3f)) }
+        dragHandle = { BottomSheetDefaults.DragHandle() }
     ) {
         Column(
             modifier = Modifier
@@ -604,12 +770,12 @@ private fun MoreBottomSheet(
         ) {
             Text(
                 text = "More options",
-                color = Color.White,
+                color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
             )
-            HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             actions.forEach { action ->
                 MoreActionRow(
                     action = action,
@@ -641,13 +807,13 @@ private fun MoreActionRow(
             modifier = Modifier
                 .size(40.dp)
                 .clip(CircleShape)
-                .background(Color.White.copy(alpha = 0.08f)),
+                .background(MaterialTheme.colorScheme.surfaceVariant),
             contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = action.icon,
                 contentDescription = action.title,
-                tint = Color.White,
+                tint = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.size(20.dp)
             )
         }
@@ -655,14 +821,14 @@ private fun MoreActionRow(
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = action.title,
-                color = Color.White,
+                color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Medium
             )
             if (action.subtitle != null) {
                 Text(
                     text = action.subtitle,
-                    color = Color.White.copy(alpha = 0.55f),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 12.sp
                 )
             }

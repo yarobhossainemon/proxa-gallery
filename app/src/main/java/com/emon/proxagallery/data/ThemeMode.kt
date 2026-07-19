@@ -8,14 +8,12 @@ package com.emon.proxagallery.data
 enum class ThemeMode {
     SYSTEM_DEFAULT,
     DARK,
-    LIGHT,
-    BLOSSOM_PINK;
+    LIGHT;
 
     /** Human-readable label shown in the theme picker UI. */
     fun displayName(): String = when (this) {
         SYSTEM_DEFAULT -> "System Default"
         DARK -> "Dark"
         LIGHT -> "Light"
-        BLOSSOM_PINK -> "Blossom Pink"
     }
 }

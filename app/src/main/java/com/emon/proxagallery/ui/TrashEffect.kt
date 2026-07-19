@@ -12,4 +12,6 @@ sealed class TrashEffect {
     data class ShowError(val message: String) : TrashEffect()
 
     object RestoreSuccess : TrashEffect()
+
+    object RestoreAllSuccess : TrashEffect()
 }

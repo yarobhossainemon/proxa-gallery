@@ -24,6 +24,9 @@ interface TrashDao {
     @Query("SELECT * FROM trash_items WHERE mediaId = :mediaId LIMIT 1")
     suspend fun getByMediaId(mediaId: Long): TrashItem?
 
+    @Query("SELECT * FROM trash_items WHERE id IN (:ids)")
+    suspend fun getByIds(ids: List<Long>): List<TrashItem>
+
     @Query("SELECT * FROM trash_items WHERE expiresAt <= :now")
     suspend fun getExpired(now: Long): List<TrashItem>
 

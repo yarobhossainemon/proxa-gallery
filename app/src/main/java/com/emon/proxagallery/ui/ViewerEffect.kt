@@ -29,4 +29,24 @@ sealed class ViewerEffect {
      * The gallery grid should call [LazyPagingItems.refresh] on its paging flows.
      */
     object PhotoDeleted : ViewerEffect()
+
+    /**
+     * External data changed the gallery's backing MediaStore (e.g. a restore from
+     * Recently Deleted). The gallery grid should call [LazyPagingItems.refresh] on
+     * its paging flows. Reuses the same refresh path as [PhotoDeleted].
+     */
+    object GalleryRefresh : ViewerEffect()
+
+    /**
+     * An error occurred during the delete flow. The UI should show a snackbar
+     * or toast with the provided message.
+     */
+    data class ShowError(val message: String) : ViewerEffect()
+
+    /**
+     * The ViewModel resolved the selected photos into shareable content Uris.
+     * [GalleryNavHost] builds and launches a single ACTION_SEND_MULTIPLE intent.
+     * The selection remains active after the share sheet returns.
+     */
+    data class SharePhotos(val uris: List<Uri>) : ViewerEffect()
 }

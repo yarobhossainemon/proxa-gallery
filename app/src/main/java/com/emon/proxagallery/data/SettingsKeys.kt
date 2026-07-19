@@ -20,6 +20,8 @@ object SettingsKeys {
 
     val THEME_MODE = intPreferencesKey("theme_mode")
 
+    val ACCENT_COLOR = intPreferencesKey("accent_color")
+
     object Defaults {
         // NAME_ASC.ordinal is evaluated at runtime, so this cannot be `const`.
         // A plain `val` in an object is initialized once (singleton) and stays
@@ -28,5 +30,6 @@ object SettingsKeys {
         const val SELECTED_TAB = 0
         val PHOTO_SORT_OPTION = PhotoSortOption.NEWEST.ordinal
         val DEFAULT_THEME_MODE = ThemeMode.SYSTEM_DEFAULT.ordinal
+        val DEFAULT_ACCENT_COLOR = AccentColor.BLUE.ordinal
     }
 }

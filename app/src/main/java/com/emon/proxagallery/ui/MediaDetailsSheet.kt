@@ -56,6 +56,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -67,7 +68,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -82,6 +82,10 @@ import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.emon.proxagallery.data.MediaDetails
+import com.emon.proxagallery.ui.theme.FavoriteRed
+import com.emon.proxagallery.ui.theme.MapPinBlue
+import com.emon.proxagallery.ui.theme.PhotoBadgeGreen
+import com.emon.proxagallery.ui.theme.VideoBadgeBlue
 import com.emon.proxagallery.util.formatAspectRatio
 import com.emon.proxagallery.util.formatDateMs
 import com.emon.proxagallery.util.formatDateSec
@@ -93,12 +97,6 @@ import com.emon.proxagallery.util.formatMegabitsPerSecond
 import com.emon.proxagallery.util.formatMegapixels
 import com.emon.proxagallery.util.formatOrientation
 import com.emon.proxagallery.util.formatResolution
-
-private val CardBg = Color(0xFF1E2330)
-private val SheetBg = Color(0xFF161A22)
-private val ContentFg = Color.White.copy(alpha = 0.9f)
-private val LabelFg = Color.White.copy(alpha = 0.5f)
-private val DividerColor = Color.White.copy(alpha = 0.06f)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -113,8 +111,7 @@ fun MediaDetailsSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = SheetBg,
-        dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.3f)) }
+        dragHandle = { BottomSheetDefaults.DragHandle() }
     ) {
         Column(
             modifier = Modifier
@@ -162,7 +159,7 @@ private fun PreviewHeader(
                 .fillMaxWidth()
                 .aspectRatio(16f / 9f)
                 .clip(RoundedCornerShape(16.dp))
-                .background(Color(0xFF12161E))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
         ) {
             AsyncImage(
                 model = request,
@@ -181,7 +178,7 @@ private fun PreviewHeader(
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = details.displayName,
-                    color = ContentFg,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
                     maxLines = 2,
@@ -196,7 +193,7 @@ private fun PreviewHeader(
                     if (details.width != null && details.height != null) {
                         Text(
                             text = formatResolution(details.width, details.height),
-                            color = LabelFg,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 12.sp
                         )
                     }
@@ -209,14 +206,14 @@ private fun PreviewHeader(
                     details.fileSize?.let {
                         Text(
                             text = formatFileSizeBytes(it),
-                            color = LabelFg,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 12.sp
                         )
                     }
                     details.dateTakenMs?.let {
                         Text(
                             text = formatDateMs(it),
-                            color = LabelFg,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 12.sp
                         )
                     }
@@ -228,7 +225,7 @@ private fun PreviewHeader(
                     imageVector = if (isFavorite) Icons.Rounded.Favorite
                     else Icons.Rounded.FavoriteBorder,
                     contentDescription = if (isFavorite) "Favorited" else "Not favorited",
-                    tint = if (isFavorite) Color(0xFFFF1744) else Color.White.copy(alpha = 0.4f),
+                    tint = if (isFavorite) FavoriteRed else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(28.dp)
                 )
             }
@@ -239,9 +236,9 @@ private fun PreviewHeader(
 @Composable
 private fun MediaTypeBadge(isVideo: Boolean) {
     val (icon, label, bg) = if (isVideo) {
-        Triple(Icons.Rounded.Videocam, "Video", Color(0xFF1565C0))
+        Triple(Icons.Rounded.Videocam, "Video", VideoBadgeBlue)
     } else {
-        Triple(Icons.Rounded.Photo, "Photo", Color(0xFF2E7D32))
+        Triple(Icons.Rounded.Photo, "Photo", PhotoBadgeGreen)
     }
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -282,7 +279,7 @@ private fun DetailsSection(
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 6.dp)
             .clip(RoundedCornerShape(16.dp))
-            .background(CardBg)
+            .background(MaterialTheme.colorScheme.surfaceVariant)
             .animateContentSize(
                 animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing)
             )
@@ -297,13 +294,13 @@ private fun DetailsSection(
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = ContentFg.copy(alpha = 0.7f),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(20.dp)
             )
             Spacer(Modifier.width(10.dp))
             Text(
                 text = title,
-                color = ContentFg,
+                color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f)
@@ -311,7 +308,7 @@ private fun DetailsSection(
             Icon(
                 imageVector = Icons.Rounded.ExpandMore,
                 contentDescription = if (expanded) "Collapse" else "Expand",
-                tint = LabelFg,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier
                     .size(20.dp)
                     .graphicsLayer {
@@ -355,21 +352,21 @@ private fun DetailRow(
         Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = LabelFg,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(18.dp)
         )
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = label,
-                color = LabelFg,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Medium
             )
             Spacer(Modifier.height(2.dp))
             Text(
                 text = value,
-                color = ContentFg,
+                color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 13.sp,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
@@ -382,13 +379,13 @@ private fun DetailRow(
             Icon(
                 imageVector = Icons.Rounded.ContentCopy,
                 contentDescription = "Copy $label",
-                tint = LabelFg,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(16.dp)
             )
         }
     }
     if (!isLast) {
-        HorizontalDivider(color = DividerColor)
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
     }
 }
 
@@ -579,20 +576,20 @@ private fun LocationSection(details: MediaDetails) {
                 .fillMaxWidth()
                 .height(120.dp)
                 .clip(RoundedCornerShape(12.dp))
-                .background(Color(0xFF12161E)),
+                .background(MaterialTheme.colorScheme.surface),
             contentAlignment = Alignment.Center
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Icon(
                     imageVector = Icons.Rounded.LocationOn,
                     contentDescription = null,
-                    tint = Color(0xFF4FC3F7),
+                    tint = MapPinBlue,
                     modifier = Modifier.size(32.dp)
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
                     text = coordText,
-                    color = ContentFg,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium
                 )
@@ -629,14 +626,14 @@ private fun ActionChip(
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(10.dp))
-            .background(Color.White.copy(alpha = 0.08f))
+            .background(MaterialTheme.colorScheme.surface)
             .clickable(onClick = onClick)
             .padding(vertical = 10.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = text,
-            color = ContentFg,
+            color = MaterialTheme.colorScheme.onSurface,
             fontSize = 12.sp,
             fontWeight = FontWeight.Medium
         )

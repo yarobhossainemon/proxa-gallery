@@ -13,6 +13,7 @@ data class MediaItem(
     val height: Int? = null,
     val fileSize: Long? = null,
     val dateTakenMs: Long? = null,
+    val dateAddedMs: Long? = null,
     val bucketId: Long? = null,
     val bucketDisplayName: String? = null,
     val durationMs: Long? = null,

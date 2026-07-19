@@ -7,7 +7,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CancellationException
 
 class MediaPagingSource(
-    private val repository: GalleryRepository
+    private val repository: GalleryRepository,
+    private val sortOrder: String
 ) : PagingSource<Int, MediaItem>() {
 
     override fun getRefreshKey(state: PagingState<Int, MediaItem>): Int? {
@@ -21,7 +22,7 @@ class MediaPagingSource(
         val position = params.key ?: 0
         return try {
             val response = withContext(Dispatchers.IO) {
-                repository.getPhotos(offset = position, limit = params.loadSize)
+                repository.getPhotos(offset = position, limit = params.loadSize, sortOrder = sortOrder)
             }
             val nextKey = if (response.size < params.loadSize) {
                 null
@@ -44,7 +45,8 @@ class MediaPagingSource(
 
 class AlbumPagingSource(
     private val repository: GalleryRepository,
-    private val bucketId: Long
+    private val bucketId: Long,
+    private val sortOrder: String
 ) : PagingSource<Int, MediaItem>() {
 
     override fun getRefreshKey(state: PagingState<Int, MediaItem>): Int? {
@@ -58,7 +60,7 @@ class AlbumPagingSource(
         val position = params.key ?: 0
         return try {
             val response = withContext(Dispatchers.IO) {
-                repository.getPhotosForAlbum(bucketId = bucketId, offset = position, limit = params.loadSize)
+                repository.getPhotosForAlbum(bucketId = bucketId, offset = position, limit = params.loadSize, sortOrder = sortOrder)
             }
             val nextKey = if (response.size < params.loadSize) {
                 null
@@ -81,7 +83,8 @@ class AlbumPagingSource(
 
 class SearchPagingSource(
     private val repository: GalleryRepository,
-    private val query: String
+    private val query: String,
+    private val sortOrder: String
 ) : PagingSource<Int, MediaItem>() {
 
     override fun getRefreshKey(state: PagingState<Int, MediaItem>): Int? {
@@ -95,7 +98,7 @@ class SearchPagingSource(
         val position = params.key ?: 0
         return try {
             val response = withContext(Dispatchers.IO) {
-                repository.getPhotosForSearch(query = query, offset = position, limit = params.loadSize)
+                repository.getPhotosForSearch(query = query, offset = position, limit = params.loadSize, sortOrder = sortOrder)
             }
             val nextKey = if (response.size < params.loadSize) {
                 null

@@ -2,12 +2,24 @@ package com.emon.proxagallery.data
 
 import android.app.RecoverableSecurityException
 import android.content.ContentUris
+import android.content.ContentResolver
 import android.content.Context
+import android.database.ContentObserver
 import android.media.ExifInterface
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 class GalleryRepository(
     context: Context
@@ -15,6 +27,57 @@ class GalleryRepository(
     private val appContext = context.applicationContext
     private val contentResolver = appContext.contentResolver
     private val externalContentUri = MediaStore.Files.getContentUri("external")
+
+    /**
+     * Emits whenever the MediaStore-backed media library changes externally —
+     * camera capture, screenshot, download, copy, or a delete by another app.
+     *
+     * Backed by a single [ContentObserver] registered on
+     * [MediaStore.Files.getContentUri]("external") with `notifyForDescendants`,
+     * so any media write anywhere under the external volume triggers it.
+     *
+     * Coalesced with a short debounce: the system often fires many notifications
+     * in quick succession when a burst of writes happens (e.g. a camera burst or
+     * a multi-file copy). [conflate] keeps only the latest pending emission and
+     * [debounce] collapses a burst into a single refresh, so the UI never thrashes
+     * and scrolling performance is unaffected. No polling and no timers — purely
+     * event-driven from the OS.
+     *
+     * The observer is automatically unregistered when the collecting scope is
+     * cancelled (the Flow closes via [callbackFlow]/[awaitClose]).
+     */
+    @OptIn(FlowPreview::class, ExperimentalCoroutinesApi::class)
+    val mediaStoreChanges: Flow<Long> = callbackFlow {
+        val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean, uri: Uri?) {
+                trySend(System.currentTimeMillis())
+            }
+        }
+        contentResolver.registerContentObserver(
+            externalContentUri,
+            /* notifyForDescendants = */ true,
+            observer
+        )
+        awaitClose {
+            contentResolver.unregisterContentObserver(observer)
+        }
+    }
+        .debounce(REFRESH_DEBOUNCE_MS)
+        .conflate()
+        .distinctUntilChanged()
+
+    private companion object {
+        /**
+         * Collapse bursts of MediaStore notifications into a single refresh so a
+         * camera burst or multi-file download doesn't trigger refresh storms.
+         * Long enough to coalesce typical bursts, short enough to feel instant.
+         */
+        private const val REFRESH_DEBOUNCE_MS = 500L
+    }
+
+    /** Builds a SQL ORDER BY clause from a [PhotoSortOption]. */
+    fun buildSortOrder(option: PhotoSortOption): String =
+        "${option.column} ${if (option.ascending) "ASC" else "DESC"}"
 
     private val mediaProjection = arrayOf(
         MediaStore.Files.FileColumns._ID,
@@ -32,7 +95,11 @@ class GalleryRepository(
         MediaStore.Files.FileColumns.DURATION
     )
 
-    fun getPhotos(offset: Int = 0, limit: Int = Int.MAX_VALUE): List<MediaItem> {
+    fun getPhotos(
+        offset: Int = 0,
+        limit: Int = Int.MAX_VALUE,
+        sortOrder: String = "${MediaStore.Files.FileColumns.DATE_ADDED} DESC"
+    ): List<MediaItem> {
         val selection = "${MediaStore.Files.FileColumns.IS_PENDING} = ? AND (" +
             "${MediaStore.Files.FileColumns.MEDIA_TYPE} = ? OR " +
             "(${MediaStore.Files.FileColumns.MEDIA_TYPE} = ? AND ${MediaStore.Files.FileColumns.SIZE} >= ?))"
@@ -42,12 +109,16 @@ class GalleryRepository(
             MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO.toString(),
             "307200" // 300 KB in bytes
         )
-        val sortOrder = "${MediaStore.Files.FileColumns.DATE_ADDED} DESC"
 
         return queryMediaItems(mediaProjection, selection, selectionArgs, sortOrder, offset, limit)
     }
 
-    fun getPhotosForAlbum(bucketId: Long, offset: Int = 0, limit: Int = Int.MAX_VALUE): List<MediaItem> {
+    fun getPhotosForAlbum(
+        bucketId: Long,
+        offset: Int = 0,
+        limit: Int = Int.MAX_VALUE,
+        sortOrder: String = "${MediaStore.Files.FileColumns.DATE_ADDED} DESC"
+    ): List<MediaItem> {
         val selection = "${MediaStore.Files.FileColumns.IS_PENDING} = ? AND " +
             "(${MediaStore.Files.FileColumns.MEDIA_TYPE} = ? OR " +
             "(${MediaStore.Files.FileColumns.MEDIA_TYPE} = ? AND ${MediaStore.Files.FileColumns.SIZE} >= ?)) AND " +
@@ -59,15 +130,19 @@ class GalleryRepository(
             "307200",
             bucketId.toString()
         )
-        val sortOrder = "${MediaStore.Files.FileColumns.DATE_ADDED} DESC"
 
         return queryMediaItems(mediaProjection, selection, selectionArgs, sortOrder, offset, limit)
     }
 
-    fun getPhotosForSearch(query: String, offset: Int = 0, limit: Int = Int.MAX_VALUE): List<MediaItem> {
+    fun getPhotosForSearch(
+        query: String,
+        offset: Int = 0,
+        limit: Int = Int.MAX_VALUE,
+        sortOrder: String = "${MediaStore.Files.FileColumns.DATE_ADDED} DESC"
+    ): List<MediaItem> {
         val cleanQuery = query.trim()
         if (cleanQuery.isEmpty()) {
-            return getPhotos(offset, limit)
+            return getPhotos(offset, limit, sortOrder)
         }
         val selection = "${MediaStore.Files.FileColumns.IS_PENDING} = ? AND (" +
             "${MediaStore.Files.FileColumns.MEDIA_TYPE} = ? OR " +
@@ -86,7 +161,6 @@ class GalleryRepository(
             likeArg,
             likeArg
         )
-        val sortOrder = "${MediaStore.Files.FileColumns.DATE_ADDED} DESC"
 
         return queryMediaItems(mediaProjection, selection, selectionArgs, sortOrder, offset, limit)
     }
@@ -181,6 +255,7 @@ class GalleryRepository(
                             height = height.takeIf { it > 0 },
                             fileSize = size.takeIf { it > 0L },
                             dateTakenMs = dateTaken.takeIf { it > 0L } ?: dateAdded.takeIf { it > 0L },
+                            dateAddedMs = dateAdded.takeIf { it > 0L },
                             bucketId = bucketId.takeIf { it > 0L },
                             bucketDisplayName = bucketDisplayName,
                             durationMs = duration.takeIf { it > 0L },
@@ -244,22 +319,134 @@ class GalleryRepository(
         }
 
         return uniqueBuckets.mapNotNull { (bucketId, displayName) ->
-            getAlbumDetails(bucketId, selection, selectionArgs)?.let { (count, coverUri) ->
+            getAlbumDetails(bucketId, selection, selectionArgs)?.let { (count, coverUri, dateAdded) ->
                 Album(
                     id = bucketId,
                     displayName = displayName,
                     coverPhotoUri = coverUri,
-                    itemCount = count
+                    itemCount = count,
+                    dateAdded = dateAdded
                 )
             }
-        }.sortedBy { it.displayName.lowercase() }
+        }
+    }
+
+    /**
+     * Returns aggregate statistics for a single album: photo count, video count,
+     * and total storage size. Queries MediaStore directly — never cached.
+     */
+    fun getAlbumStats(bucketId: Long): AlbumStats {
+        val selection = "${MediaStore.Files.FileColumns.IS_PENDING} = ? AND " +
+            "(${MediaStore.Files.FileColumns.MEDIA_TYPE} = ? OR " +
+            "(${MediaStore.Files.FileColumns.MEDIA_TYPE} = ? AND ${MediaStore.Files.FileColumns.SIZE} >= ?)) AND " +
+            "${MediaStore.Files.FileColumns.BUCKET_ID} = ?"
+        val selectionArgs = arrayOf(
+            "0",
+            MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE.toString(),
+            MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO.toString(),
+            "307200",
+            bucketId.toString()
+        )
+
+        val projection = arrayOf(
+            MediaStore.Files.FileColumns.MEDIA_TYPE,
+            MediaStore.Files.FileColumns.SIZE
+        )
+
+        var photoCount = 0
+        var videoCount = 0
+        var totalSize = 0L
+
+        contentResolver.query(
+            externalContentUri,
+            projection,
+            selection,
+            selectionArgs,
+            null
+        )?.use { cursor ->
+            val mediaTypeCol = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.MEDIA_TYPE)
+            val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.SIZE)
+            while (cursor.moveToNext()) {
+                val mediaType = cursor.getInt(mediaTypeCol)
+                val size = cursor.getLong(sizeCol)
+                if (mediaType == MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE) {
+                    photoCount++
+                } else {
+                    videoCount++
+                }
+                totalSize += size
+            }
+        }
+
+        return AlbumStats(
+            photoCount = photoCount,
+            videoCount = videoCount,
+            totalSizeBytes = totalSize
+        )
+    }
+
+    /**
+     * Returns library-wide aggregate statistics: total photo count, video count,
+     * and total storage size across ALL albums.
+     *
+     * This is the same query as [getAlbumStats] minus the `BUCKET_ID = ?` filter,
+     * so the dashboard counts stay consistent with what the media grid actually
+     * shows (same 300 KB video-size guard, same IS_PENDING = 0 selection).
+     * Queries MediaStore directly — never cached.
+     */
+    fun getLibraryStats(): AlbumStats {
+        val selection = "${MediaStore.Files.FileColumns.IS_PENDING} = ? AND " +
+            "(${MediaStore.Files.FileColumns.MEDIA_TYPE} = ? OR " +
+            "(${MediaStore.Files.FileColumns.MEDIA_TYPE} = ? AND ${MediaStore.Files.FileColumns.SIZE} >= ?))"
+        val selectionArgs = arrayOf(
+            "0",
+            MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE.toString(),
+            MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO.toString(),
+            "307200"
+        )
+
+        val projection = arrayOf(
+            MediaStore.Files.FileColumns.MEDIA_TYPE,
+            MediaStore.Files.FileColumns.SIZE
+        )
+
+        var photoCount = 0
+        var videoCount = 0
+        var totalSize = 0L
+
+        contentResolver.query(
+            externalContentUri,
+            projection,
+            selection,
+            selectionArgs,
+            null
+        )?.use { cursor ->
+            val mediaTypeCol = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.MEDIA_TYPE)
+            val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.SIZE)
+            while (cursor.moveToNext()) {
+                val mediaType = cursor.getInt(mediaTypeCol)
+                val size = cursor.getLong(sizeCol)
+                if (mediaType == MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE) {
+                    photoCount++
+                } else {
+                    videoCount++
+                }
+                totalSize += size
+            }
+        }
+
+        return AlbumStats(
+            photoCount = photoCount,
+            videoCount = videoCount,
+            totalSizeBytes = totalSize
+        )
     }
 
     private fun getAlbumDetails(
         bucketId: Long,
         baseSelection: String,
         baseSelectionArgs: Array<String>
-    ): Pair<Int, Uri>? {
+    ): Triple<Int, Uri, Long>? {
         val selection = "($baseSelection) AND ${MediaStore.Files.FileColumns.BUCKET_ID} = ?"
         val selectionArgs = baseSelectionArgs + arrayOf(bucketId.toString())
         val sortOrder = "${MediaStore.Files.FileColumns.DATE_ADDED} DESC"
@@ -272,7 +459,11 @@ class GalleryRepository(
 
         contentResolver.query(
             externalContentUri,
-            arrayOf(MediaStore.Files.FileColumns._ID, MediaStore.Files.FileColumns.MEDIA_TYPE),
+            arrayOf(
+                MediaStore.Files.FileColumns._ID,
+                MediaStore.Files.FileColumns.MEDIA_TYPE,
+                MediaStore.Files.FileColumns.DATE_ADDED
+            ),
             queryArgs,
             null
         )?.use { cursor ->
@@ -280,9 +471,13 @@ class GalleryRepository(
             if (count > 0 && cursor.moveToFirst()) {
                 val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns._ID)
                 val mediaTypeColumn = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.MEDIA_TYPE)
+                val dateAddedColumn = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DATE_ADDED)
                 val id = cursor.getLong(idColumn)
                 val mediaType = cursor.getInt(mediaTypeColumn)
-                return Pair(count, mediaItemUri(id, mediaType))
+                // Sort order is DATE_ADDED DESC, so the first row is the most recent photo.
+                // Its DATE_ADDED becomes the album's representative date for Newest/Oldest sorting.
+                val dateAdded = cursor.getLong(dateAddedColumn)
+                return Triple(count, mediaItemUri(id, mediaType), dateAdded)
             }
         }
         return null
@@ -317,7 +512,9 @@ class GalleryRepository(
         return queryMediaItems(mediaProjection, selection, selectionArgs, sortOrder, 0, ids.size)
     }
 
-    fun getAllPhotoIds(): List<Long> {
+    fun getAllPhotoIds(
+        sortOrder: String = "${MediaStore.Files.FileColumns.DATE_ADDED} DESC"
+    ): List<Long> {
         val selection = "${MediaStore.Files.FileColumns.IS_PENDING} = ? AND (" +
             "${MediaStore.Files.FileColumns.MEDIA_TYPE} = ? OR " +
             "(${MediaStore.Files.FileColumns.MEDIA_TYPE} = ? AND ${MediaStore.Files.FileColumns.SIZE} >= ?))"
@@ -327,11 +524,13 @@ class GalleryRepository(
             MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO.toString(),
             "307200"
         )
-        val sortOrder = "${MediaStore.Files.FileColumns.DATE_ADDED} DESC"
         return queryMediaIds(selection, selectionArgs, sortOrder)
     }
 
-    fun getPhotoIdsForAlbum(bucketId: Long): List<Long> {
+    fun getPhotoIdsForAlbum(
+        bucketId: Long,
+        sortOrder: String = "${MediaStore.Files.FileColumns.DATE_ADDED} DESC"
+    ): List<Long> {
         val selection = "${MediaStore.Files.FileColumns.IS_PENDING} = ? AND " +
             "(${MediaStore.Files.FileColumns.MEDIA_TYPE} = ? OR " +
             "(${MediaStore.Files.FileColumns.MEDIA_TYPE} = ? AND ${MediaStore.Files.FileColumns.SIZE} >= ?)) AND " +
@@ -343,14 +542,16 @@ class GalleryRepository(
             "307200",
             bucketId.toString()
         )
-        val sortOrder = "${MediaStore.Files.FileColumns.DATE_ADDED} DESC"
         return queryMediaIds(selection, selectionArgs, sortOrder)
     }
 
-    fun getPhotoIdsForSearch(query: String): List<Long> {
+    fun getPhotoIdsForSearch(
+        query: String,
+        sortOrder: String = "${MediaStore.Files.FileColumns.DATE_ADDED} DESC"
+    ): List<Long> {
         val cleanQuery = query.trim()
         if (cleanQuery.isEmpty()) {
-            return getAllPhotoIds()
+            return getAllPhotoIds(sortOrder)
         }
         val selection = "${MediaStore.Files.FileColumns.IS_PENDING} = ? AND (" +
             "${MediaStore.Files.FileColumns.MEDIA_TYPE} = ? OR " +
@@ -369,7 +570,6 @@ class GalleryRepository(
             likeArg,
             likeArg
         )
-        val sortOrder = "${MediaStore.Files.FileColumns.DATE_ADDED} DESC"
         return queryMediaIds(selection, selectionArgs, sortOrder)
     }
 
@@ -424,6 +624,50 @@ class GalleryRepository(
             )
         } catch (e: Exception) {
             DeleteResult.Error(e.localizedMessage ?: "Unknown error during deletion.")
+        }
+    }
+
+    /**
+     * Attempt to delete multiple media items from MediaStore.
+     * On Android 11+ uses the batch createDeleteRequest path.
+     * On Android 10 attempts deletion on each item, handles RecoverableSecurityException,
+     * and proceeds to delete all remaining files.
+     */
+    fun deletePhotos(uris: List<Uri>): DeleteResult {
+        if (uris.isEmpty()) return DeleteResult.Success
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val pendingIntent = MediaStore.createDeleteRequest(contentResolver, uris)
+                DeleteResult.RequiresPermission(
+                    intentSender = pendingIntent.intentSender,
+                    retryUri = null
+                )
+            } else {
+                var pendingIntentSender: android.content.IntentSender? = null
+                var pendingUri: Uri? = null
+                for (uri in uris) {
+                    try {
+                        contentResolver.delete(uri, null, null)
+                    } catch (e: RecoverableSecurityException) {
+                        if (pendingIntentSender == null) {
+                            pendingIntentSender = e.userAction.actionIntent.intentSender
+                            pendingUri = uri
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.e("GalleryRepository", "Failed to delete $uri", e)
+                    }
+                }
+                if (pendingIntentSender != null) {
+                    DeleteResult.RequiresPermission(
+                        intentSender = pendingIntentSender,
+                        retryUri = pendingUri
+                    )
+                } else {
+                    DeleteResult.Success
+                }
+            }
+        } catch (e: Exception) {
+            DeleteResult.Error(e.localizedMessage ?: "Unknown error during batch deletion.")
         }
     }
 
