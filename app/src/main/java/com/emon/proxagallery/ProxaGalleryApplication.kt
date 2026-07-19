@@ -9,8 +9,32 @@ import coil3.disk.directory
 import coil3.memory.MemoryCache
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import coil3.video.VideoFrameDecoder
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
 
 class ProxaGalleryApplication : Application(), SingletonImageLoader.Factory {
+
+    val appContainer: AppContainer by lazy { AppContainer(this) }
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var mediaObserverJob: Job? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        mediaObserverJob = appScope.launch {
+            appContainer.mediaChangeMonitor.changes.collect {
+                appContainer.aiIndexScheduler.scheduleChanges()
+            }
+        }
+    }
+
+    override fun onTerminate() {
+        mediaObserverJob?.cancel()
+        super.onTerminate()
+    }
 
     override fun newImageLoader(context: PlatformContext): ImageLoader {
         return ImageLoader.Builder(context)
